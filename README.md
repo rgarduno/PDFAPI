@@ -1,107 +1,107 @@
-# PDFAPI — Servicio REST y Orquestador de Edición Quirúrgica de PDFs
+# PDFAPI — REST Service & Surgical PDF Orchestrator
 
-PDFAPI es el backend comercial de alta concurrencia para **PDF Engine**, construido con **FastAPI**, **Pydantic v2** y comunicación directa a través de extensiones nativas en **Rust** (`pdf_engine`). Proporciona una interfaz RESTful y WebSockets para la manipulación quirúrgica, inspección de SceneGraph, reflow en vivo y seguridad criptográfica de documentos PDF.
+PDFAPI is the high-concurrency commercial backend service for **PDF Engine**, built with **FastAPI**, **Pydantic v2**, and direct integration with native safe **Rust** extensions (`pdf_engine`). It provides a robust RESTful API and WebSocket channels for surgical PDF manipulation, SceneGraph layout inspection, real-time typographic reflow, and cryptographic document security.
 
 ---
 
-## Ecosistema PDFEngine
+## PDFEngine Ecosystem
 
-PDFAPI es el componente de servicios dentro de la arquitectura de repositorios desacoplados de **PDFEngine**:
+PDFAPI is the service orchestration layer within the decoupled **PDFEngine** multi-repository architecture:
 
-| Repositorio | Rol | Stack Tecnológico | Estado |
+| Repository | Role | Tech Stack | Status |
 | :--- | :--- | :--- | :--- |
-| [**PDFEngine**](https://github.com/rgarduno/PDFEngine) | Núcleo algorítmico de alto rendimiento y extensión nativa Python | Rust (ISO 32000-1) + PyO3 | Producción |
-| [**PDFAPI**](https://github.com/rgarduno/PDFAPI) *(Este Repo)* | Backend comercial REST, WebSockets y control multi-tenant | Python 3.13 + FastAPI + Pydantic v2 | Producción |
-| [**PDFWeb**](https://github.com/rgarduno/PDFWeb) | Estudio web interactivo con arquitectura Dual-Canvas | Next.js 16 + React 19 + Tailwind CSS | Producción |
+| [**PDFEngine**](https://github.com/rgarduno/PDFEngine) | High-performance core engine & Python extension module | Rust (ISO 32000-1) + PyO3 | Production-ready |
+| [**PDFAPI**](https://github.com/rgarduno/PDFAPI) *(This Repo)* | Commercial multi-tenant REST & WebSocket service | Python 3.13 + FastAPI + Pydantic v2 | Production-ready |
+| [**PDFWeb**](https://github.com/rgarduno/PDFWeb) | Interactive Dual-Canvas Web Studio | Next.js 16 (App Router) + React 19 + Tailwind CSS | Production-ready |
 
 ---
 
-## Características Principales
+## Key Features
 
-- **Aislamiento Criptográfico Multi-Inquilino (Multi-Tenant)**:
-  - Autenticación obligatoria mediante encabezado `Authorization: Bearer <token>`.
-  - Las sesiones de documentos están indexadas por hash SHA-256 del inquilino; peticiones ajenas o inexistentes retornan `404 Not Found` para evitar enumeración.
-- **Concurrencia Segura y Bloqueo Atómico (`@serialized_mutation`)**:
-  - Exclusión mutua por documento (`document_mutation(doc_id)`) para evitar condiciones de carrera durante ediciones simultáneas.
-  - Ordenamiento canónico de IDs en operaciones multi-documento (fusión/merge) para prevenir interbloqueos (*deadlocks*).
-- **Inspección de SceneGraph y Tipografía Fidedigna**:
-  - Extracción de glifos, cajas delimitadoras ($BBox$), matrices de texto ($T_m$), interlineado y anchos de fuentes subsetteadas y compuestas Type0.
-- **Mutación Quirúrgica & Reflow en Vivo**:
-  - Sustitución atómica de nodos de texto y actualización del content stream sin recomponer el documento ni alterar vectores/imágenes no modificados.
-  - Canal WebSocket (`/ws/documents/{id}/pages/{page}/reflow`) para cálculo de saltos de línea y ancho en tiempo real mientras el usuario escribe en Web Studio.
-- **Seguridad Documental y Firma Electrónica**:
-  - Firma digital detached PKCS#7 / CMS (RFC 5652) con llaves RSA o ECDSA (formatos PEM y PKCS#12).
-  - Embebido de sellos de tiempo RFC 3161 mediante cliente TSA integrado.
-  - Atestación de rango de bytes SHA-256 sobre rangos no contiguos `/ByteRange`.
-- **Auditoría Inmutable**:
-  - Pista de auditoría en memoria que registra eventos (`document_uploaded`, `redacted`, `signed`, `documents_compared`, etc.) sin exponer secretos ni contenido sensible.
-- **Herramientas de Valor Empresarial**:
-  - Detección de tablas (Lattice & Stream) y exportación a JSON, CSV, Markdown y HTML.
-  - Censura quirúrgica de datos personales (RFC, CURP, SSN, tarjetas bancarias) con purga en árbol COS.
-  - Inyección de capa de búsqueda OCR invisible (`3 Tr`) en páginas escaneadas.
-  - Validación y conversión archivística PDF/A-1b y PDF/A-2b (ISO 19005).
-  - Sincronización bidireccional de metadatos `/Info` y XMP.
-  - Motor de comparación y diferencias (Diff Engine) con algoritmo LCS seguro.
-
----
-
-## Requisitos Previos
-
-- **Python**: `>= 3.10` (Recomendado Python 3.12 o 3.13)
-- **Tesseract OCR**: (Opcional, necesario para endpoints de OCR invisible)
-- **`pdf_engine`**: Extensión nativa de Rust compilada.
+- **Multi-Tenant Cryptographic Isolation**:
+  - Mandatory authentication via `Authorization: Bearer <token>` header.
+  - Document sessions indexed by SHA-256 tenant hash; unauthorized or non-existent access requests return `404 Not Found` to prevent timing attacks and document enumeration.
+- **Thread-Safe Concurrency & Atomic Locking (`@serialized_mutation`)**:
+  - Per-document mutual exclusion (`document_mutation(doc_id)`) preventing race conditions during simultaneous editing operations.
+  - Canonical document ID ordering in multi-document operations (merge) to eliminate deadlocks.
+- **SceneGraph Inspection & Faithful Typography**:
+  - Glyph extraction, bounding boxes ($BBox$), text matrices ($T_m$), leading, baseline calculations, and metric resolution for subsetted and composite Type0 CID fonts.
+- **Surgical AST Mutation & Real-Time Live Reflow**:
+  - Atomic in-place replacement of text nodes within the page content stream without recompiling or altering non-edited vector artwork, blend modes, or images.
+  - Dedicated WebSocket endpoint (`/ws/documents/{id}/pages/{page}/reflow`) for live line-wrap and bounding box calculations as the user types.
+- **Enterprise Security & Electronic Signatures**:
+  - Detached PKCS#7 / CMS (RFC 5652) digital signatures with RSA and ECDSA keys (PEM and PKCS#12 containers).
+  - RFC 3161 Time-Stamp Protocol (TSA) client support embedded into unsigned CMS attributes.
+  - Non-contiguous `/ByteRange` SHA-256 integrity attestation.
+- **Tamper-Evident Audit Trail**:
+  - In-memory structured audit logger recording critical operational events (`document_uploaded`, `redacted`, `signed`, `documents_compared`, etc.) without leaking credentials or sensitive file bytes.
+- **Enterprise PDF Operations**:
+  - High-precision table extraction (Lattice & Stream algorithms) with multi-format export (JSON, CSV, Markdown, HTML).
+  - Surgical redaction of PII (RFC, CURP, SSN, Credit Cards) with full COS tree sanitation.
+  - Invisible searchable text layer injection (`3 Tr` rendering mode) over scanned pages via local Tesseract OCR.
+  - Archival validation and conversion for PDF/A-1b and PDF/A-2b (ISO 19005).
+  - Bidirectional metadata editor and synchronizer (`/Info` and XMP RDF packages).
+  - Semantic and visual PDF Diff Engine powered by LCS algorithms.
 
 ---
 
-## Configuración y Variables de Entorno
+## Prerequisites
 
-Crea un archivo `.env` basado en `.env.example`:
+- **Python**: `>= 3.10` (Python 3.12 or 3.13 recommended)
+- **Tesseract OCR**: (Optional, required only for invisible OCR endpoints)
+- **`pdf_engine`**: Native Rust extension module.
+
+---
+
+## Configuration & Environment Variables
+
+Copy `.env.example` to create `.env`:
 
 ```bash
 cp .env.example .env
 ```
 
-| Variable | Descripción | Valor por Defecto |
+| Variable | Description | Default |
 | :--- | :--- | :--- |
-| `PDFENGINE_API_KEYS` | Claves Bearer autorizadas separadas por comas | `""` |
-| `PDFENGINE_CORS_ORIGINS` | Orígenes HTTP permitidos para CORS | `http://localhost:3000` |
-| `PDFENGINE_MAX_UPLOAD_BYTES` | Tamaño máximo de archivo por carga | `33554432` (32 MiB) |
-| `PDFENGINE_MAX_SESSIONS` | Capacidad máxima de documentos en memoria | `32` |
-| `PDFENGINE_MAX_RETAINED_BYTES` | Límite total de bytes retenidos en memoria | `268435456` (256 MiB) |
-| `PDFENGINE_SESSION_TTL_SECONDS` | Tiempo de vida de sesión inactiva | `1800` (30 min) |
+| `PDFENGINE_API_KEYS` | Comma-separated authorized Bearer tokens | `""` |
+| `PDFENGINE_CORS_ORIGINS` | Allowed HTTP origins for CORS | `http://localhost:3000` |
+| `PDFENGINE_MAX_UPLOAD_BYTES` | Maximum file upload size in bytes | `33554432` (32 MiB) |
+| `PDFENGINE_MAX_SESSIONS` | Maximum active document sessions in memory | `32` |
+| `PDFENGINE_MAX_RETAINED_BYTES` | Total memory budget for resident documents | `268435456` (256 MiB) |
+| `PDFENGINE_SESSION_TTL_SECONDS` | Inactivity TTL before session eviction | `1800` (30 min) |
 
 ---
 
-## Instalación y Desarrollo Local
+## Installation & Local Development
 
 ```bash
-# 1. Crear y activar entorno virtual
+# 1. Create and activate virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 
-# 2. Instalar dependencias
+# 2. Install Python dependencies
 pip install -r requirements.txt
 
-# 3. Instalar la extensión nativa pdf_engine
-# Opción A: Desde el repositorio local PDFEngine (modo editable)
+# 3. Install the native pdf_engine extension
+# Option A: From local PDFEngine repository (editable development mode)
 pip install -e ../PDFEngine
 
-# Opción B: Desde un wheel compilado
-# pip install /ruta/a/pdf_engine-0.1.0-cp313-cp313-macosx_11_0_arm64.whl
+# Option B: From precompiled binary wheel
+# pip install /path/to/pdf_engine-0.1.0-cp313-cp313-macosx_11_0_arm64.whl
 
-# 4. Iniciar el servidor API
+# 4. Start the API server
 uvicorn app.main:app --reload --port 8000
 ```
 
-La documentación interactiva OpenAPI / Swagger UI estará disponible en:
-- Swagger: [http://localhost:8000/docs](http://localhost:8000/docs)
+Interactive OpenAPI / Swagger UI documentation is available at:
+- Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs)
 - ReDoc: [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
 ---
 
-## Pruebas de Integración y Calidad
+## Testing & Quality Assurance
 
-Para ejecutar la suite completa de pruebas:
+Run the comprehensive integration test suite:
 
 ```bash
 source .venv/bin/activate
@@ -110,21 +110,21 @@ pytest tests/ -v
 
 ---
 
-## Despliegue con Docker
+## Production Deployment with Docker
 
 ```bash
-# Construir imagen Docker
+# Build container image
 docker build -t pdf-api:latest .
 
-# Ejecutar contenedor
+# Run containerized service
 docker run -d -p 8000:8000 \
-  -e PDFENGINE_API_KEYS="tu-clave-secreta-de-produccion" \
-  -e PDFENGINE_CORS_ORIGINS="https://tu-estudio-web.com" \
+  -e PDFENGINE_API_KEYS="your-production-secret-token" \
+  -e PDFENGINE_CORS_ORIGINS="https://your-web-studio.com" \
   pdf-api:latest
 ```
 
 ---
 
-## Licencia
+## License
 
-Distribuido bajo la licencia MIT.
+Distributed under the MIT License.
