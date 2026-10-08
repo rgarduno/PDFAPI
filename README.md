@@ -4,6 +4,18 @@ PDFAPI es el backend comercial de alta concurrencia para **PDF Engine**, constru
 
 ---
 
+## Ecosistema PDFEngine
+
+PDFAPI es el componente de servicios dentro de la arquitectura de repositorios desacoplados de **PDFEngine**:
+
+| Repositorio | Rol | Stack Tecnológico | Estado |
+| :--- | :--- | :--- | :--- |
+| [**PDFEngine**](https://github.com/rgarduno/PDFEngine) | Núcleo algorítmico de alto rendimiento y extensión nativa Python | Rust (ISO 32000-1) + PyO3 | Producción |
+| [**PDFAPI**](https://github.com/rgarduno/PDFAPI) *(Este Repo)* | Backend comercial REST, WebSockets y control multi-tenant | Python 3.13 + FastAPI + Pydantic v2 | Producción |
+| [**PDFWeb**](https://github.com/rgarduno/PDFWeb) | Estudio web interactivo con arquitectura Dual-Canvas | Next.js 16 + React 19 + Tailwind CSS | Producción |
+
+---
+
 ## Características Principales
 
 - **Aislamiento Criptográfico Multi-Inquilino (Multi-Tenant)**:
