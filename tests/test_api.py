@@ -3188,3 +3188,95 @@ def test_document_outlines_toc_workflow():
     assert del_res.status_code == 200
     assert del_res.json()["total_items"] == 0
     assert del_res.json()["outlines"] == []
+
+
+def test_document_attachments_workflow():
+    """Verify embedded file attachments CRUD (GET, POST, download, DELETE) and export survival."""
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("portfolio.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    # 1. Initially empty
+    init_res = client.get(f"/api/documents/{doc_id}/attachments")
+    assert init_res.status_code == 200
+    assert init_res.json()["total_attachments"] == 0
+    assert init_res.json()["attachments"] == []
+
+    # 2. Add two attachments (XML invoice + CSV schedule)
+    xml_bytes = b'<?xml version="1.0" encoding="UTF-8"?><Invoice><ID>CFDI-2026-99</ID></Invoice>'
+    csv_bytes = b"item,qty,unit_price\nServer License,2,1250.00\n"
+
+    add1 = client.post(
+        f"/api/documents/{doc_id}/attachments",
+        json={
+            "name": "cfdi_2026.xml",
+            "content_base64": base64.b64encode(xml_bytes).decode("ascii"),
+            "mime_type": "text/xml",
+            "description": "Comprobante Fiscal Digital XML",
+        },
+    )
+    assert add1.status_code == 200
+    assert add1.json()["total_attachments"] == 1
+    assert add1.json()["attachments"][0]["name"] == "cfdi_2026.xml"
+    assert add1.json()["attachments"][0]["size"] == len(xml_bytes)
+
+    add2 = client.post(
+        f"/api/documents/{doc_id}/attachments",
+        json={
+            "name": "anexo_costos.csv",
+            "content_base64": base64.b64encode(csv_bytes).decode("ascii"),
+            "mime_type": "text/csv",
+            "description": "Desglose de costos",
+        },
+    )
+    assert add2.status_code == 200
+    assert add2.json()["total_attachments"] == 2
+
+    # 3. Extract attachment metadata + base64 payload
+    ext_res = client.get(f"/api/documents/{doc_id}/attachments/cfdi_2026.xml")
+    assert ext_res.status_code == 200
+    ext_data = ext_res.json()
+    assert ext_data["attachment"]["filename"] == "cfdi_2026.xml"
+    assert ext_data["attachment"]["mime_type"] == "text/xml"
+    assert base64.b64decode(ext_data["content_base64"]) == xml_bytes
+
+    # 4. Download raw binary attachment with nosniff header
+    dl_res = client.get(
+        f"/api/documents/{doc_id}/attachments/anexo_costos.csv",
+        params={"download": "true"},
+    )
+    assert dl_res.status_code == 200
+    assert dl_res.content == csv_bytes
+    assert dl_res.headers.get("x-content-type-options") == "nosniff"
+    assert "anexo_costos.csv" in dl_res.headers.get("content-disposition", "")
+
+    # 5. Export PDF and re-upload to verify embedded files survive serialization
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    reupload = client.post(
+        "/api/documents/upload",
+        files={"file": ("reloaded.pdf", io.BytesIO(exported.content), "application/pdf")},
+    )
+    assert reupload.status_code == 200
+    reloaded_id = reupload.json()["document_id"]
+    relisted = client.get(f"/api/documents/{reloaded_id}/attachments")
+    assert relisted.status_code == 200
+    assert relisted.json()["total_attachments"] == 2
+
+    # 6. Delete an attachment and verify 404 on second delete
+    del_res = client.delete(f"/api/documents/{doc_id}/attachments/cfdi_2026.xml")
+    assert del_res.status_code == 200
+    assert del_res.json()["deleted"] is True
+
+    del_again = client.delete(f"/api/documents/{doc_id}/attachments/cfdi_2026.xml")
+    assert del_again.status_code == 404
+
+    final_list = client.get(f"/api/documents/{doc_id}/attachments")
+    assert final_list.status_code == 200
+    assert final_list.json()["total_attachments"] == 1
+    assert final_list.json()["attachments"][0]["name"] == "anexo_costos.csv"
+

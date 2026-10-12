@@ -29,6 +29,8 @@ _ACTIONS = frozenset({
     "form_fields_auto_detected",
     "detected_form_fields_applied",
     "outlines_updated",
+    "attachment_added",
+    "attachment_deleted",
 })
 
 logger = logging.getLogger("pdfengine.audit")

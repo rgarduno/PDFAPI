@@ -874,3 +874,50 @@ class AddOutlineItemRequest(BaseModel):
     item: OutlineItemModel
     parent_indices: Optional[List[int]] = Field(default=None, description="0-based index path to parent node, or null for root")
 
+
+class EmbeddedAttachmentInfoModel(BaseModel):
+    """Metadata describing an embedded file attachment (ISO 32000-1 §7.11.4)."""
+    name: str = Field(description="Logical key in the /EmbeddedFiles name tree")
+    filename: str = Field(description="Resolved filename from /UF or /F")
+    mime_type: str = Field(description="MIME type from /Subtype")
+    size: int = Field(description="Uncompressed byte size of the embedded payload")
+    description: Optional[str] = Field(default=None, description="Optional description from /Desc")
+    creation_date: Optional[str] = Field(default=None, description="Optional creation timestamp")
+    modification_date: Optional[str] = Field(default=None, description="Optional modification timestamp")
+    checksum_md5: Optional[str] = Field(default=None, description="Lowercase hex MD5 digest")
+    checksum_sha256: str = Field(description="Lowercase hex SHA-256 digest of the payload")
+    source: str = Field(description="Origin: 'embedded_files' or 'page_annotation'")
+    page_number: Optional[int] = Field(default=None, description="1-based page number if attached via page annotation")
+
+
+class DocumentAttachmentsResponse(BaseModel):
+    """Response listing all embedded file attachments in a document."""
+    success: bool = True
+    document_id: str
+    total_attachments: int
+    attachments: List[EmbeddedAttachmentInfoModel]
+
+
+class AddAttachmentRequest(BaseModel):
+    """Request payload to embed a file into the document's /Names /EmbeddedFiles tree."""
+    name: str = Field(min_length=1, max_length=255, description="Attachment filename")
+    content_base64: str = Field(min_length=1, description="Base64-encoded binary content of the file")
+    mime_type: Optional[str] = Field(default="application/octet-stream", description="MIME type of the attachment")
+    description: Optional[str] = Field(default=None, description="Optional human-readable description")
+
+
+class ExtractedAttachmentResponse(BaseModel):
+    """Response containing extracted attachment metadata and base64-encoded payload."""
+    success: bool = True
+    document_id: str
+    attachment: EmbeddedAttachmentInfoModel
+    content_base64: str
+
+
+class DeleteAttachmentResponse(BaseModel):
+    """Response confirming deletion of an embedded attachment."""
+    success: bool = True
+    document_id: str
+    deleted: bool
+    name: str
+

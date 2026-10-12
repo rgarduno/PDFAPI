@@ -123,6 +123,11 @@ from app.models import (
     DocumentOutlinesResponse,
     UpdateOutlinesRequest,
     AddOutlineItemRequest,
+    EmbeddedAttachmentInfoModel,
+    DocumentAttachmentsResponse,
+    AddAttachmentRequest,
+    ExtractedAttachmentResponse,
+    DeleteAttachmentResponse,
 )
 
 app = FastAPI(
@@ -2972,3 +2977,152 @@ def clear_document_outlines_endpoint(doc_id: str):
         raise
     except Exception as e:
         raise _public_error(400, e)
+
+
+def _py_attachment_info_to_model(info) -> EmbeddedAttachmentInfoModel:
+    return EmbeddedAttachmentInfoModel(
+        name=info.name,
+        filename=info.filename,
+        mime_type=info.mime_type,
+        size=info.size,
+        description=info.description,
+        creation_date=info.creation_date,
+        modification_date=info.modification_date,
+        checksum_md5=info.checksum_md5,
+        checksum_sha256=info.checksum_sha256,
+        source=info.source,
+        page_number=info.page_number,
+    )
+
+
+@app.get(
+    "/api/documents/{doc_id}/attachments",
+    response_model=DocumentAttachmentsResponse,
+)
+def list_document_attachments_endpoint(doc_id: str):
+    """Lists all embedded file attachments in the document (/Names /EmbeddedFiles and /FileAttachment annotations)."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        raw_items = doc.list_attachments()
+        models = [_py_attachment_info_to_model(item) for item in raw_items]
+        return DocumentAttachmentsResponse(
+            success=True,
+            document_id=doc_id,
+            total_attachments=len(models),
+            attachments=models,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.post(
+    "/api/documents/{doc_id}/attachments",
+    response_model=DocumentAttachmentsResponse,
+)
+@serialized_mutation
+def add_document_attachment_endpoint(doc_id: str, request: AddAttachmentRequest):
+    """Embeds a file into the document's /Names /EmbeddedFiles name tree (ISO 32000-1 §7.11.4)."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        try:
+            raw_bytes = base64.b64decode(request.content_base64, validate=True)
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="Attachment content_base64 must be valid base64.",
+            )
+        doc.add_attachment(
+            request.name,
+            raw_bytes,
+            request.mime_type,
+            request.description,
+        )
+        record_document_action("attachment_added", doc_id)
+        updated = [_py_attachment_info_to_model(item) for item in doc.list_attachments()]
+        return DocumentAttachmentsResponse(
+            success=True,
+            document_id=doc_id,
+            total_attachments=len(updated),
+            attachments=updated,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.get(
+    "/api/documents/{doc_id}/attachments/{attachment_name}",
+    response_model=ExtractedAttachmentResponse,
+)
+def get_document_attachment_endpoint(
+    doc_id: str,
+    attachment_name: str,
+    download: bool = False,
+):
+    """Extracts a specific embedded file attachment by name or filename."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        extracted = doc.extract_attachment(attachment_name)
+    except Exception as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(
+                status_code=404,
+                detail="Requested attachment was not found in the document.",
+            )
+        raise _public_error(400, e)
+
+    info_model = _py_attachment_info_to_model(extracted.info)
+    raw_bytes = bytes(extracted.data)
+
+    if download:
+        return Response(
+            content=raw_bytes,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": _content_disposition("attachment", info_model.filename),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    return ExtractedAttachmentResponse(
+        success=True,
+        document_id=doc_id,
+        attachment=info_model,
+        content_base64=base64.b64encode(raw_bytes).decode("ascii"),
+    )
+
+
+@app.delete(
+    "/api/documents/{doc_id}/attachments/{attachment_name}",
+    response_model=DeleteAttachmentResponse,
+)
+@serialized_mutation
+def delete_document_attachment_endpoint(doc_id: str, attachment_name: str):
+    """Deletes an embedded file attachment by logical name or filename."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        deleted = doc.delete_attachment(attachment_name)
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail="Requested attachment was not found in the document.",
+            )
+        record_document_action("attachment_deleted", doc_id)
+        return DeleteAttachmentResponse(
+            success=True,
+            document_id=doc_id,
+            deleted=True,
+            name=attachment_name,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
