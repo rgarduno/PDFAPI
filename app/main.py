@@ -2329,6 +2329,7 @@ def get_security_status_endpoint(doc_id: str):
     doc = session["doc"]
     try:
         is_enc = doc.is_encrypted()
+        enc_algo = doc.encryption_algorithm() if is_enc else None
         raw_sigs = doc.verify_signatures()
         sig_models = [
             SignatureModel(
@@ -2349,6 +2350,7 @@ def get_security_status_endpoint(doc_id: str):
         return SecurityStatusResponse(
             document_id=doc_id,
             is_encrypted=is_enc,
+            encryption_algorithm=enc_algo,
             signatures=sig_models,
         )
     except HTTPException:
@@ -2363,7 +2365,7 @@ def get_security_status_endpoint(doc_id: str):
 )
 @serialized_mutation
 def encrypt_document_endpoint(doc_id: str, request: EncryptDocumentRequest):
-    """Encrypts document using AES-128 and password protection."""
+    """Encrypts document using AES-128 (Revision 4) or AES-256 (Revision 5/6) and password protection."""
     session = load_session(doc_id)
 
     doc = session["doc"]
@@ -2382,17 +2384,21 @@ def encrypt_document_endpoint(doc_id: str, request: EncryptDocumentRequest):
                 p.assemble_document,
             )
 
+        algo = request.algorithm or "aes128"
         doc.encrypt(
             user_password=request.user_password,
             owner_password=request.owner_password,
             permissions=perms,
             encrypt_metadata=request.encrypt_metadata if request.encrypt_metadata is not None else True,
+            algorithm=algo,
         )
+        enc_algo = doc.encryption_algorithm()
         return SecurityActionResponse(
             success=True,
             document_id=doc_id,
-            message="Document successfully encrypted with AES-128.",
+            message=f"Document successfully encrypted with {enc_algo or algo.upper()}.",
             is_encrypted=True,
+            encryption_algorithm=enc_algo,
         )
     except HTTPException:
         raise

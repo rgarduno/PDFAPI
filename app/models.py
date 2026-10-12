@@ -566,11 +566,12 @@ class PermissionsModel(BaseModel):
 
 
 class EncryptDocumentRequest(BaseModel):
-    """Request payload to encrypt document with AES-128 and password protection."""
+    """Request payload to encrypt document with AES-128 or AES-256 and password protection."""
     user_password: str = Field(default="", description="Password required to open and read document")
     owner_password: str = Field(min_length=1, description="Owner password required to change permissions. No default is applied.")
     permissions: Optional[PermissionsModel] = Field(default=None, description="Bits stored in /P. This process does not enforce them.")
     encrypt_metadata: Optional[bool] = Field(default=True, description="Whether to encrypt metadata stream")
+    algorithm: Optional[str] = Field(default="aes128", description="Encryption algorithm: 'aes128' (Rev 4), 'aes256' (Rev 6), or 'aes256-r5' (Rev 5)")
 
 
 class DecryptDocumentRequest(BaseModel):
@@ -621,6 +622,7 @@ class SecurityStatusResponse(BaseModel):
     """Encryption state plus each signature integrity check."""
     document_id: str
     is_encrypted: bool
+    encryption_algorithm: Optional[str] = None
     signatures: List[SignatureModel]
 
 
@@ -630,6 +632,7 @@ class SecurityActionResponse(BaseModel):
     document_id: str
     message: str
     is_encrypted: Optional[bool] = None
+    encryption_algorithm: Optional[str] = None
     signature: Optional[SignatureModel] = None
 
 

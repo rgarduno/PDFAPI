@@ -3048,14 +3048,56 @@ def test_smart_form_field_detection_and_apply_workflow():
     assert any(e["action"] == "detected_form_fields_applied" and e["document_id"] == doc_id for e in events)
 
 
+def test_aes256_rev6_encryption_and_decryption_workflow():
+    """Tests ISO 32000-2 AES-256 Revision 6 encryption, status inspection, and decryption."""
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload_res = client.post(
+        "/api/documents/upload",
+        files={"file": ("secret_aes256.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_res.status_code == 200
+    doc_id = upload_res.json()["document_id"]
 
+    # 1. Encrypt with AES-256 Revision 6
+    enc_res = client.post(
+        f"/api/documents/{doc_id}/security/encrypt",
+        json={
+            "user_password": "user_aes256_secret",
+            "owner_password": "owner_aes256_master",
+            "algorithm": "aes256",
+            "encrypt_metadata": True,
+        },
+    )
+    assert enc_res.status_code == 200
+    enc_data = enc_res.json()
+    assert enc_data["success"] is True
+    assert enc_data["is_encrypted"] is True
+    assert enc_data["encryption_algorithm"] == "AES-256-R6"
 
+    # 2. Check security status
+    status_res = client.get(f"/api/documents/{doc_id}/security")
+    assert status_res.status_code == 200
+    status_data = status_res.json()
+    assert status_data["is_encrypted"] is True
+    assert status_data["encryption_algorithm"] == "AES-256-R6"
 
+    # 3. Wrong password must fail
+    bad_dec = client.post(
+        f"/api/documents/{doc_id}/security/decrypt",
+        json={"password": "wrong_password"},
+    )
+    assert bad_dec.status_code == 400
 
+    # 4. Decrypt with user password succeeds
+    ok_dec = client.post(
+        f"/api/documents/{doc_id}/security/decrypt",
+        json={"password": "user_aes256_secret"},
+    )
+    assert ok_dec.status_code == 200
+    assert ok_dec.json()["is_encrypted"] is False
 
-
-
-
-
-
+    status_after = client.get(f"/api/documents/{doc_id}/security")
+    assert status_after.status_code == 200
+    assert status_after.json()["is_encrypted"] is False
+    assert status_after.json()["encryption_algorithm"] is None
 
