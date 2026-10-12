@@ -119,6 +119,10 @@ from app.models import (
     UpdateDocumentMetadataRequest,
     CompareDocumentsRequest,
     CompareDocumentsResponse,
+    OutlineItemModel,
+    DocumentOutlinesResponse,
+    UpdateOutlinesRequest,
+    AddOutlineItemRequest,
 )
 
 app = FastAPI(
@@ -2835,7 +2839,136 @@ def compare_documents_endpoint(
         raise _public_error(400, e)
 
 
+def _py_outline_to_model(item) -> OutlineItemModel:
+    return OutlineItemModel(
+        title=item.title,
+        page_number=item.page_number,
+        top=item.top,
+        left=item.left,
+        zoom=item.zoom,
+        uri=item.uri,
+        is_open=item.is_open,
+        bold=item.bold,
+        italic=item.italic,
+        color=list(item.color) if item.color is not None else None,
+        children=[_py_outline_to_model(c) for c in item.children],
+    )
 
 
+def _model_to_py_outline(model: OutlineItemModel):
+    return pdf_engine.OutlineItem(
+        title=model.title,
+        page_number=model.page_number,
+        top=model.top,
+        left=model.left,
+        zoom=model.zoom,
+        uri=model.uri,
+        is_open=model.is_open,
+        bold=model.bold,
+        italic=model.italic,
+        color=model.color,
+        children=[_model_to_py_outline(c) for c in model.children],
+    )
 
 
+def _count_outline_nodes(items: List[OutlineItemModel]) -> int:
+    return sum(1 + _count_outline_nodes(i.children) for i in items)
+
+
+@app.get(
+    "/api/documents/{doc_id}/outlines",
+    response_model=DocumentOutlinesResponse,
+)
+def get_document_outlines_endpoint(doc_id: str):
+    """Retrieves the hierarchical Table of Contents / Bookmarks (/Outlines) tree."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        raw_items = doc.get_outlines()
+        models = [_py_outline_to_model(item) for item in raw_items]
+        return DocumentOutlinesResponse(
+            success=True,
+            document_id=doc_id,
+            total_items=_count_outline_nodes(models),
+            outlines=models,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.put(
+    "/api/documents/{doc_id}/outlines",
+    response_model=DocumentOutlinesResponse,
+)
+@serialized_mutation
+def update_document_outlines_endpoint(doc_id: str, request: UpdateOutlinesRequest):
+    """Replaces the document's Table of Contents / Bookmarks (/Outlines) tree."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        py_items = [_model_to_py_outline(m) for m in request.outlines]
+        total_written = doc.set_outlines(py_items)
+        record_document_action("outlines_updated", doc_id)
+        updated = [_py_outline_to_model(item) for item in doc.get_outlines()]
+        return DocumentOutlinesResponse(
+            success=True,
+            document_id=doc_id,
+            total_items=total_written,
+            outlines=updated,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.post(
+    "/api/documents/{doc_id}/outlines",
+    response_model=DocumentOutlinesResponse,
+)
+@serialized_mutation
+def add_document_outline_item_endpoint(doc_id: str, request: AddOutlineItemRequest):
+    """Appends a single bookmark node at the root or under parent_indices."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        py_item = _model_to_py_outline(request.item)
+        total_written = doc.add_outline_item(py_item, request.parent_indices)
+        record_document_action("outlines_updated", doc_id)
+        updated = [_py_outline_to_model(item) for item in doc.get_outlines()]
+        return DocumentOutlinesResponse(
+            success=True,
+            document_id=doc_id,
+            total_items=total_written,
+            outlines=updated,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.delete(
+    "/api/documents/{doc_id}/outlines",
+    response_model=DocumentOutlinesResponse,
+)
+@serialized_mutation
+def clear_document_outlines_endpoint(doc_id: str):
+    """Clears all bookmarks (/Outlines) from the document."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        doc.clear_outlines()
+        record_document_action("outlines_updated", doc_id)
+        return DocumentOutlinesResponse(
+            success=True,
+            document_id=doc_id,
+            total_items=0,
+            outlines=[],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)

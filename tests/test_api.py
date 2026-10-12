@@ -3101,3 +3101,90 @@ def test_aes256_rev6_encryption_and_decryption_workflow():
     assert status_after.json()["is_encrypted"] is False
     assert status_after.json()["encryption_algorithm"] is None
 
+
+def test_document_outlines_toc_workflow():
+    """Tests hierarchical PDF Outlines / Table of Contents CRUD via REST endpoints."""
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload_res = client.post(
+        "/api/documents/upload",
+        files={"file": ("toc_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_res.status_code == 200
+    doc_id = upload_res.json()["document_id"]
+
+    # 1. Initially empty
+    init_res = client.get(f"/api/documents/{doc_id}/outlines")
+    assert init_res.status_code == 200
+    assert init_res.json()["total_items"] == 0
+    assert init_res.json()["outlines"] == []
+
+    # 2. Replace with hierarchical tree (PUT)
+    put_res = client.put(
+        f"/api/documents/{doc_id}/outlines",
+        json={
+            "outlines": [
+                {
+                    "title": "Capítulo 1: Resumen Ejecutivo",
+                    "page_number": 1,
+                    "top": 720.0,
+                    "bold": True,
+                    "is_open": True,
+                    "children": [
+                        {
+                            "title": "1.1 Objetivos",
+                            "page_number": 1,
+                            "top": 500.0,
+                            "italic": True,
+                        },
+                        {
+                            "title": "1.2 Portal Oficial",
+                            "uri": "https://example.com/portal",
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+    assert put_res.status_code == 200
+    put_data = put_res.json()
+    assert put_data["total_items"] == 3
+    assert len(put_data["outlines"]) == 1
+    assert put_data["outlines"][0]["title"] == "Capítulo 1: Resumen Ejecutivo"
+    assert put_data["outlines"][0]["bold"] is True
+    assert len(put_data["outlines"][0]["children"]) == 2
+    assert put_data["outlines"][0]["children"][0]["title"] == "1.1 Objetivos"
+    assert put_data["outlines"][0]["children"][1]["uri"] == "https://example.com/portal"
+
+    # 3. Append a child item under index [0] (POST)
+    post_res = client.post(
+        f"/api/documents/{doc_id}/outlines",
+        json={
+            "item": {
+                "title": "1.3 Alcance Financiero",
+                "page_number": 1,
+                "top": 300.0,
+            },
+            "parent_indices": [0],
+        },
+    )
+    assert post_res.status_code == 200
+    assert post_res.json()["total_items"] == 4
+    assert len(post_res.json()["outlines"][0]["children"]) == 3
+
+    # 4. Unsafe URI scheme is rejected
+    bad_uri_res = client.post(
+        f"/api/documents/{doc_id}/outlines",
+        json={
+            "item": {
+                "title": "Bad Link",
+                "uri": "javascript:alert(1)",
+            }
+        },
+    )
+    assert bad_uri_res.status_code == 400
+
+    # 5. Clear outlines (DELETE)
+    del_res = client.delete(f"/api/documents/{doc_id}/outlines")
+    assert del_res.status_code == 200
+    assert del_res.json()["total_items"] == 0
+    assert del_res.json()["outlines"] == []

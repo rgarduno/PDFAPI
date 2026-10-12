@@ -28,6 +28,7 @@ _ACTIONS = frozenset({
     "documents_compared",
     "form_fields_auto_detected",
     "detected_form_fields_applied",
+    "outlines_updated",
 })
 
 logger = logging.getLogger("pdfengine.audit")

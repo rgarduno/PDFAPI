@@ -837,3 +837,40 @@ class CompareDocumentsResponse(BaseModel):
     metadata_diffs: List[MetadataDiffItemModel] = []
     pages: List[PageDiffModel] = []
 
+
+class OutlineItemModel(BaseModel):
+    """Hierarchical bookmark / Table of Contents item (ISO 32000-1 §12.3.3)."""
+    title: str = Field(min_length=1, description="Display title of the bookmark")
+    page_number: Optional[int] = Field(default=None, description="1-based target page number")
+    top: Optional[float] = Field(default=None, description="Optional vertical Y coordinate on target page")
+    left: Optional[float] = Field(default=None, description="Optional horizontal X coordinate on target page")
+    zoom: Optional[float] = Field(default=None, description="Optional zoom factor on target page")
+    uri: Optional[str] = Field(default=None, description="Optional external http/https URL")
+    is_open: bool = Field(default=True, description="Whether child bookmarks are expanded by default")
+    bold: bool = Field(default=False, description="Bold title text")
+    italic: bool = Field(default=False, description="Italic title text")
+    color: Optional[List[float]] = Field(default=None, description="Optional RGB color [r, g, b] in [0.0, 1.0]")
+    children: List["OutlineItemModel"] = Field(default_factory=list, description="Nested child bookmarks")
+
+
+OutlineItemModel.model_rebuild()
+
+
+class DocumentOutlinesResponse(BaseModel):
+    """Response containing the document's Table of Contents / Bookmarks hierarchy."""
+    success: bool = True
+    document_id: str
+    total_items: int
+    outlines: List[OutlineItemModel]
+
+
+class UpdateOutlinesRequest(BaseModel):
+    """Request payload to replace the document's Table of Contents / Bookmarks tree."""
+    outlines: List[OutlineItemModel] = Field(default_factory=list, description="Root-level outline items")
+
+
+class AddOutlineItemRequest(BaseModel):
+    """Request payload to append a single bookmark node at root or under parent_indices."""
+    item: OutlineItemModel
+    parent_indices: Optional[List[int]] = Field(default=None, description="0-based index path to parent node, or null for root")
+
