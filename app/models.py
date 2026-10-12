@@ -211,6 +211,59 @@ class UpdateFormFieldResponse(BaseModel):
     message: str
 
 
+class DetectedFormFieldCandidateModel(BaseModel):
+    """Candidate form field detected from vector graphics and labels."""
+    candidate_id: int
+    field_type: str = Field(description="Inferred field type: Text, Checkbox, Signature, Choice")
+    suggested_name: str
+    label: Optional[str] = None
+    bbox: BoundingBox
+    confidence: float = Field(ge=0.0, le=1.0, description="Detection confidence score")
+
+
+class DetectFormFieldsResponse(BaseModel):
+    """Response returned upon detecting form field candidates on a page."""
+    document_id: str
+    page_number: int
+    total_candidates: int
+    candidates: List[DetectedFormFieldCandidateModel]
+
+
+class ApplyDetectedFormFieldItem(BaseModel):
+    """Specific candidate field to apply as an interactive AcroForm widget."""
+    candidate_id: Optional[int] = None
+    suggested_name: Optional[str] = None
+    field_type: str = Field(default="Text")
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+    label: Optional[str] = None
+    confidence: Optional[float] = 1.0
+
+
+class ApplyDetectedFormsRequest(BaseModel):
+    """Payload to apply detected form field candidates."""
+    candidates: Optional[List[ApplyDetectedFormFieldItem]] = Field(
+        default=None,
+        description="Explicit candidates to apply. If omitted or null, all detected candidates on page are applied.",
+    )
+    min_confidence: Optional[float] = Field(
+        default=0.5,
+        description="Minimum confidence threshold when auto-applying all detected candidates.",
+    )
+
+
+class ApplyDetectedFormsResponse(BaseModel):
+    """Response returned upon converting candidates into interactive AcroForms."""
+    success: bool
+    document_id: str
+    page_number: int
+    created_fields_count: int
+    fields: List[FormFieldModel]
+    message: str
+
+
 class RotatePageRequest(BaseModel):
     """Request payload to rotate a page."""
     degrees: int = Field(default=90, description="Degrees to rotate: 90, 180, 270, or relative offset")

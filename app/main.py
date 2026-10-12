@@ -50,6 +50,9 @@ from app.models import (
     AddTextWatermarkRequest,
     AnnotationActionResponse,
     AnnotationModel,
+    ApplyDetectedFormFieldItem,
+    ApplyDetectedFormsRequest,
+    ApplyDetectedFormsResponse,
     AuditEventResponse,
     BatchFillFormsRequest,
     BoundingBox,
@@ -57,6 +60,8 @@ from app.models import (
     CreateFormFieldResponse,
     DeleteFormFieldResponse,
     DeletePagesRequest,
+    DetectedFormFieldCandidateModel,
+    DetectFormFieldsResponse,
     DocumentFormsResponse,
     DocumentOverviewResponse,
     DocumentUploadResponse,
@@ -1373,6 +1378,128 @@ def update_form_field_endpoint(doc_id: str, field_name: str, request: UpdateForm
             document_id=doc_id,
             field=field_model,
             message=f"Form field '{field_name}' successfully updated.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.get(
+    "/api/documents/{doc_id}/pages/{page_idx}/forms/detect",
+    response_model=DetectFormFieldsResponse,
+)
+def detect_form_fields_endpoint(doc_id: str, page_idx: int):
+    """Detects smart form field candidates from vector underlines, boxes, checkboxes, and labels."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        raw_candidates = doc.detect_form_fields(page_idx)
+        candidates = []
+        for c in raw_candidates:
+            min_x, min_y, max_x, max_y = c.bbox()
+            candidates.append(
+                DetectedFormFieldCandidateModel(
+                    candidate_id=c.candidate_id,
+                    field_type=c.field_type,
+                    suggested_name=c.suggested_name,
+                    label=c.label,
+                    bbox=BoundingBox(
+                        min_x=round(min_x, 2),
+                        min_y=round(min_y, 2),
+                        max_x=round(max_x, 2),
+                        max_y=round(max_y, 2),
+                        width=round(max_x - min_x, 2),
+                        height=round(max_y - min_y, 2),
+                    ),
+                    confidence=round(c.confidence, 2),
+                )
+            )
+
+        record_document_action("form_fields_auto_detected", doc_id)
+
+        return DetectFormFieldsResponse(
+            document_id=doc_id,
+            page_number=page_idx,
+            total_candidates=len(candidates),
+            candidates=candidates,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.post(
+    "/api/documents/{doc_id}/pages/{page_idx}/forms/apply-detected",
+    response_model=ApplyDetectedFormsResponse,
+)
+@serialized_mutation
+def apply_detected_form_fields_endpoint(
+    doc_id: str, page_idx: int, request: Optional[ApplyDetectedFormsRequest] = None
+):
+    """Converts detected form field candidates into interactive AcroForms on the page."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        core_cands = None
+        if request and request.candidates:
+            core_cands = []
+            for item in request.candidates:
+                cand = pdf_engine.DetectedFormFieldCandidate(
+                    candidate_id=item.candidate_id or 1,
+                    field_type=item.field_type,
+                    suggested_name=item.suggested_name or f"Field_{page_idx}",
+                    label=item.label,
+                    min_x=item.min_x,
+                    min_y=item.min_y,
+                    max_x=item.max_x,
+                    max_y=item.max_y,
+                    confidence=item.confidence if item.confidence is not None else 1.0,
+                )
+                core_cands.append(cand)
+        elif request and request.min_confidence is not None:
+            all_cands = doc.detect_form_fields(page_idx)
+            core_cands = [c for c in all_cands if c.confidence >= request.min_confidence]
+
+        raw_created = doc.apply_detected_form_fields(page_idx, core_cands)
+        field_models = []
+        for f in raw_created:
+            min_x, min_y, max_x, max_y = f.bbox()
+            field_models.append(
+                FormFieldModel(
+                    id=f.id,
+                    name=f.name,
+                    alt_name=f.alt_name,
+                    field_type=f.field_type,
+                    value=f.value,
+                    default_value=f.default_value,
+                    bbox=BoundingBox(
+                        min_x=round(min_x, 2),
+                        min_y=round(min_y, 2),
+                        max_x=round(max_x, 2),
+                        max_y=round(max_y, 2),
+                        width=round(max_x - min_x, 2),
+                        height=round(max_y - min_y, 2),
+                    ),
+                    page_number=f.page_number,
+                    options=f.options,
+                    is_read_only=f.is_read_only,
+                    is_required=f.is_required,
+                    is_multiline=f.is_multiline,
+                    max_length=f.max_length,
+                )
+            )
+
+        record_document_action("detected_form_fields_applied", doc_id)
+
+        return ApplyDetectedFormsResponse(
+            success=True,
+            document_id=doc_id,
+            page_number=page_idx,
+            created_fields_count=len(field_models),
+            fields=field_models,
+            message=f"Successfully applied {len(field_models)} detected form fields on page {page_idx}.",
         )
     except HTTPException:
         raise

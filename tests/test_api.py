@@ -2932,6 +2932,123 @@ def test_compare_documents_api_endpoint():
     assert bad_res.status_code == 404
 
 
+def create_form_detection_test_pdf_bytes() -> bytes:
+    """Constructs a test PDF with vector underlines, boxes, checkboxes, and labels."""
+    pdf = bytearray()
+    pdf.extend(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+
+    off1 = len(pdf)
+    pdf.extend(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+
+    off2 = len(pdf)
+    pdf.extend(b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n")
+
+    off3 = len(pdf)
+    pdf.extend(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents 4 0 R >>\nendobj\n"
+    )
+
+    off4 = len(pdf)
+    stream_content = (
+        b"q\n"
+        b"BT /F1 12 Tf 50 700 Td (Full Name:) Tj ET\n"
+        b"120 696 200 20 re S\n"
+        b"BT /F1 12 Tf 50 650 Td (Signature:) Tj ET\n"
+        b"120 648 m 320 648 l S\n"
+        b"50 600 14 14 re S\n"
+        b"BT /F1 12 Tf 72 602 Td (I agree to terms) Tj ET\n"
+        b"Q\n"
+    )
+    pdf.extend(f"4 0 obj\n<< /Length {len(stream_content)} >>\nstream\n".encode())
+    pdf.extend(stream_content)
+    pdf.extend(b"endstream\nendobj\n")
+
+    xref_off = len(pdf)
+    pdf.extend(b"xref\n0 5\n0000000000 65535 f \n")
+    pdf.extend(f"{off1:010d} 00000 n \n".encode())
+    pdf.extend(f"{off2:010d} 00000 n \n".encode())
+    pdf.extend(f"{off3:010d} 00000 n \n".encode())
+    pdf.extend(f"{off4:010d} 00000 n \n".encode())
+    pdf.extend(b"trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n")
+    pdf.extend(f"{xref_off}\n%%EOF\n".encode())
+    return bytes(pdf)
+
+
+def test_smart_form_field_detection_and_apply_workflow():
+    """Validates automatic detection and application of form fields from vector layout."""
+    pdf_bytes = create_form_detection_test_pdf_bytes()
+    upload_res = client.post(
+        "/api/documents/upload",
+        files={"file": ("form_detect_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_res.status_code == 200
+    doc_id = upload_res.json()["document_id"]
+
+    # 1. Detect form field candidates on page 1
+    detect_res = client.get(f"/api/documents/{doc_id}/pages/1/forms/detect")
+    assert detect_res.status_code == 200
+    data = detect_res.json()
+    assert data["document_id"] == doc_id
+    assert data["page_number"] == 1
+    assert data["total_candidates"] == 3
+
+    candidates = data["candidates"]
+    # Candidate 1: Full Name Text field
+    name_cand = candidates[0]
+    assert name_cand["field_type"] == "Text"
+    assert name_cand["suggested_name"] == "FullName"
+    assert name_cand["label"] == "Full Name"
+    assert name_cand["confidence"] >= 0.85
+
+    # Candidate 2: Signature field
+    sig_cand = candidates[1]
+    assert sig_cand["field_type"] == "Signature"
+    assert sig_cand["suggested_name"] == "Signature"
+    assert sig_cand["label"] == "Signature"
+    assert sig_cand["confidence"] >= 0.90
+
+    # Candidate 3: Checkbox field
+    chk_cand = candidates[2]
+    assert chk_cand["field_type"] == "Checkbox"
+    assert chk_cand["suggested_name"] == "IAgreeToTerms"
+    assert chk_cand["label"] == "I agree to terms"
+    assert chk_cand["confidence"] >= 0.85
+
+    # 2. Apply detected form fields with min_confidence filter
+    apply_res = client.post(
+        f"/api/documents/{doc_id}/pages/1/forms/apply-detected",
+        json={"min_confidence": 0.80},
+    )
+    assert apply_res.status_code == 200
+    apply_data = apply_res.json()
+    assert apply_data["success"] is True
+    assert apply_data["created_fields_count"] == 3
+    assert len(apply_data["fields"]) == 3
+
+    # 3. Retrieve document forms and ensure all 3 fields exist in AcroForm
+    forms_res = client.get(f"/api/documents/{doc_id}/forms")
+    assert forms_res.status_code == 200
+    forms_data = forms_res.json()
+    assert forms_data["count"] == 3
+    names = {f["name"] for f in forms_data["fields"]}
+    assert "FullName" in names
+    assert "Signature" in names
+    assert "IAgreeToTerms" in names
+
+    # 4. Re-running detection on page 1 should report 0 candidates now that they are interactive
+    redetect_res = client.get(f"/api/documents/{doc_id}/pages/1/forms/detect")
+    assert redetect_res.status_code == 200
+    assert redetect_res.json()["total_candidates"] == 0
+
+    # 5. Check audit events recorded
+    audit_res = client.get("/api/audit")
+    assert audit_res.status_code == 200
+    events = audit_res.json()
+    assert any(e["action"] == "form_fields_auto_detected" and e["document_id"] == doc_id for e in events)
+    assert any(e["action"] == "detected_form_fields_applied" and e["document_id"] == doc_id for e in events)
+
+
+
 
 
 
