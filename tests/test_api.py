@@ -3428,3 +3428,84 @@ def test_document_layers_ocg_workflow():
     assert del_again.status_code == 404
 
 
+def test_hard_flatten_permanently_workflow():
+    """Verify permanent hard-flattening burns in AcroForms, stamps, shapes, and highlights and purges interactive dicts."""
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("contract_to_flatten.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    # 1. Create an interactive AcroForm text field with a value
+    create_field = client.post(
+        f"/api/documents/{doc_id}/pages/1/forms",
+        json={
+            "name": "SignatoryName",
+            "field_type": "Text",
+            "min_x": 72.0,
+            "min_y": 500.0,
+            "max_x": 280.0,
+            "max_y": 524.0,
+            "value": "Roberto Garduno",
+        },
+    )
+    assert create_field.status_code == 200
+
+    # 2. Add a rubber stamp annotation
+    stamp_res = client.post(
+        f"/api/documents/{doc_id}/pages/1/annotations/stamp",
+        json={
+            "stamp_type": "Approved",
+            "min_x": 350.0,
+            "min_y": 500.0,
+            "max_x": 510.0,
+            "max_y": 550.0,
+            "custom_text": "FINALIZED & LOCKED",
+        },
+    )
+    assert stamp_res.status_code == 200
+
+    # 3. Add a vector shape annotation (/AP /N Form XObject)
+    shape_res = client.post(
+        f"/api/documents/{doc_id}/pages/1/annotations/shape",
+        json={
+            "kind": "Square",
+            "points": [[72.0, 400.0], [220.0, 460.0]],
+            "stroke": [0.1, 0.3, 0.8],
+            "fill": [0.92, 0.96, 1.0],
+            "line_width": 2.0,
+            "opacity": 0.9,
+        },
+    )
+    assert shape_res.status_code == 200
+
+    # 4. Execute permanent hard flatten
+    flat_res = client.post(f"/api/documents/{doc_id}/flatten-permanently")
+    assert flat_res.status_code == 200
+    flat_data = flat_res.json()
+    assert flat_data["success"] is True
+    assert flat_data["pages_flattened"] == 1
+    assert flat_data["forms_flattened"] == 1
+    assert flat_data["annotations_flattened"] == 2
+    assert flat_data["appearance_streams_compiled"] >= 2
+    assert flat_data["objects_purged"] >= 3
+
+    # 5. Interactive forms and annotations are completely purged
+    forms_after = client.get(f"/api/documents/{doc_id}/forms")
+    assert forms_after.status_code == 200
+    assert forms_after.json()["fields"] == []
+
+    annots_after = client.get(f"/api/documents/{doc_id}/pages/1/annotations")
+    assert annots_after.status_code == 200
+    assert annots_after.json()["annotations"] == []
+
+    # 6. Burned-in form value and stamp text are now permanent paragraphs in the page SceneGraph
+    sg = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph").json()
+    combined_text = " | ".join(p["text"] for p in sg["paragraphs"])
+    assert "Roberto Garduno" in combined_text
+    assert "FINALIZED & LOCKED" in combined_text
+
+
+

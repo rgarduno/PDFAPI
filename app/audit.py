@@ -34,6 +34,7 @@ _ACTIONS = frozenset({
     "layer_added",
     "layer_toggled",
     "layer_deleted",
+    "document_flattened_permanently",
 })
 
 logger = logging.getLogger("pdfengine.audit")

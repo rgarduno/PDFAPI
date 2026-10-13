@@ -133,6 +133,8 @@ from app.models import (
     AddLayerRequest,
     ToggleLayerRequest,
     DeleteLayerResponse,
+    HardFlattenRequest,
+    HardFlattenResponse,
 )
 
 app = FastAPI(
@@ -3262,5 +3264,43 @@ def delete_document_layer_endpoint(doc_id: str, layer_id: str):
         raise
     except Exception as e:
         raise _public_error(400, e)
+
+
+@app.post(
+    "/api/documents/{doc_id}/flatten-permanently",
+    response_model=HardFlattenResponse,
+)
+@serialized_mutation
+def flatten_document_permanently_endpoint(
+    doc_id: str,
+    request: Optional[HardFlattenRequest] = None,
+):
+    """Permanently burns in all interactive AcroForm fields, visual annotations, rubber stamps,
+    vector shapes, and /AP /N appearance streams into page content streams and purges /Annots and /AcroForm.
+    """
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        page_numbers = request.page_numbers if request is not None else None
+        report = doc.flatten_permanently(page_numbers)
+        record_document_action("document_flattened_permanently", doc_id)
+        return HardFlattenResponse(
+            success=True,
+            document_id=doc_id,
+            pages_flattened=report.pages_flattened,
+            forms_flattened=report.forms_flattened,
+            annotations_flattened=report.annotations_flattened,
+            appearance_streams_compiled=report.appearance_streams_compiled,
+            objects_purged=report.objects_purged,
+            message=(
+                f"Permanently flattened {report.forms_flattened} form field(s) and "
+                f"{report.annotations_flattened} annotation(s) across {report.pages_flattened} page(s)."
+            ),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
 
 

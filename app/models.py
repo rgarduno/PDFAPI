@@ -964,3 +964,24 @@ class DeleteLayerResponse(BaseModel):
     target: str
 
 
+class HardFlattenRequest(BaseModel):
+    """Request payload to permanently flatten interactive forms, annotations, stamps, and shapes."""
+    page_numbers: Optional[List[int]] = Field(
+        default=None,
+        description="Optional list of 1-based page numbers to flatten. If null, flattens the entire document.",
+    )
+
+
+class HardFlattenResponse(BaseModel):
+    """Response summarizing permanent hard-flattening (burn-in) metrics."""
+    success: bool = True
+    document_id: str
+    pages_flattened: int
+    forms_flattened: int
+    annotations_flattened: int
+    appearance_streams_compiled: int
+    objects_purged: int
+    message: str
+
+
+
