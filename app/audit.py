@@ -35,6 +35,8 @@ _ACTIONS = frozenset({
     "layer_toggled",
     "layer_deleted",
     "document_flattened_permanently",
+    "document_exported_docx",
+    "document_exported_markdown",
 })
 
 logger = logging.getLogger("pdfengine.audit")

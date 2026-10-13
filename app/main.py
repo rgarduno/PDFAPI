@@ -135,6 +135,7 @@ from app.models import (
     DeleteLayerResponse,
     HardFlattenRequest,
     HardFlattenResponse,
+    MarkdownExportResponse,
 )
 
 app = FastAPI(
@@ -3296,6 +3297,61 @@ def flatten_document_permanently_endpoint(
                 f"Permanently flattened {report.forms_flattened} form field(s) and "
                 f"{report.annotations_flattened} annotation(s) across {report.pages_flattened} page(s)."
             ),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.get("/api/documents/{doc_id}/export/docx")
+@serialized_mutation
+def export_document_docx_endpoint(doc_id: str):
+    """Exports the PDF document into a native Microsoft Word OpenXML (.docx) binary file."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        docx_bytes = doc.export_docx()
+        record_document_action("document_exported_docx", doc_id)
+        return Response(
+            content=bytes(docx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": 'attachment; filename="document.docx"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.get(
+    "/api/documents/{doc_id}/export/markdown",
+    response_model=MarkdownExportResponse,
+)
+@serialized_mutation
+def export_document_markdown_endpoint(doc_id: str, download: bool = False):
+    """Exports the PDF document into structured GitHub-Flavored Markdown (.md)."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        md_content = doc.export_markdown()
+        record_document_action("document_exported_markdown", doc_id)
+        if download:
+            return Response(
+                content=md_content.encode("utf-8"),
+                media_type="text/markdown; charset=utf-8",
+                headers={
+                    "Content-Disposition": 'attachment; filename="document.md"',
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+        return MarkdownExportResponse(
+            document_id=doc_id,
+            format="markdown",
+            content=md_content,
         )
     except HTTPException:
         raise

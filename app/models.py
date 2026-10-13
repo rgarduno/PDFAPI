@@ -984,4 +984,11 @@ class HardFlattenResponse(BaseModel):
     message: str
 
 
+class MarkdownExportResponse(BaseModel):
+    """Response containing the reconstructed GitHub-Flavored Markdown for an entire document."""
+    document_id: str
+    format: str = "markdown"
+    content: str
+
+
 

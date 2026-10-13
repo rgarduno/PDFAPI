@@ -3508,4 +3508,53 @@ def test_hard_flatten_permanently_workflow():
     assert "FINALIZED & LOCKED" in combined_text
 
 
+def test_export_docx_and_markdown_workflow():
+    """Tests exporting a PDF document with headings, paragraphs, and tables to OpenXML (.docx) and Markdown (.md)."""
+    import zipfile
+
+    pdf_bytes = create_pdf_with_table_bytes()
+    upload_res = client.post(
+        "/api/documents/upload",
+        files={"file": ("export_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_res.status_code == 200
+    doc_id = upload_res.json()["document_id"]
+
+    # 1. Export as Markdown JSON
+    md_res = client.get(f"/api/documents/{doc_id}/export/markdown")
+    assert md_res.status_code == 200
+    md_data = md_res.json()
+    assert md_data["document_id"] == doc_id
+    assert md_data["format"] == "markdown"
+    assert "|" in md_data["content"]
+
+    # 2. Export as Markdown attachment
+    md_dl_res = client.get(f"/api/documents/{doc_id}/export/markdown?download=true")
+    assert md_dl_res.status_code == 200
+    assert "text/markdown" in md_dl_res.headers["content-type"]
+    assert 'filename="document.md"' in md_dl_res.headers["content-disposition"]
+    assert md_dl_res.text == md_data["content"]
+
+    # 3. Export as OpenXML (.docx)
+    docx_res = client.get(f"/api/documents/{doc_id}/export/docx")
+    assert docx_res.status_code == 200
+    assert (
+        docx_res.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert 'filename="document.docx"' in docx_res.headers["content-disposition"]
+
+    with zipfile.ZipFile(io.BytesIO(docx_res.content), "r") as zf:
+        assert zf.testzip() is None
+        names = set(zf.namelist())
+        assert "[Content_Types].xml" in names
+        assert "_rels/.rels" in names
+        assert "word/document.xml" in names
+        assert "word/styles.xml" in names
+        doc_xml = zf.read("word/document.xml").decode("utf-8")
+        assert "<w:document" in doc_xml
+        assert "<w:tbl>" in doc_xml
+
+
+
 
