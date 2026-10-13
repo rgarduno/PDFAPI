@@ -68,6 +68,8 @@ from app.models import (
     DocumentUploadResponse,
     EditParagraphRequest,
     EditParagraphResponse,
+    TextBoxRequest,
+    TextBoxResponse,
     FillFormsResponse,
     FlattenAnnotationsResponse,
     FlattenFormsResponse,
@@ -681,14 +683,57 @@ def _style_color_components(raw: str) -> list[float]:
 
 def _style_failure_detail(exc: BaseException) -> Optional[str]:
     """Forwards one short engine style sentence. Other failures stay generic."""
+    return _marked_failure_detail(exc, "Style: ")
+
+
+def _text_box_failure_detail(exc: BaseException) -> Optional[str]:
+    """Forwards one short text-box sentence, or a style sentence when that is the cause."""
+    return _marked_failure_detail(exc, "Text box: ") or _marked_failure_detail(exc, "Style: ")
+
+
+def _marked_failure_detail(exc: BaseException, marker: str) -> Optional[str]:
     text = str(exc)
-    marker = text.find("Style: ")
-    if marker < 0:
+    marker_at = text.find(marker)
+    if marker_at < 0:
         return None
-    detail = text[marker + len("Style: "):].strip()
+    detail = text[marker_at + len(marker):].strip()
     if not detail or "\n" in detail or len(detail) > 200:
         return None
     return detail
+
+
+def _require_text_box_text(text: str) -> None:
+    """Rejects blank text, a string past 4000 scalars, and C0 controls other than newline."""
+    if text.strip() == "":
+        raise HTTPException(status_code=400, detail="Text is empty.")
+    if len(text) > 4000:
+        raise HTTPException(status_code=400, detail="Text is longer than 4000 characters.")
+    if any(ord(char) < 32 and char != "\n" for char in text):
+        raise HTTPException(status_code=400, detail="Text contains a control character.")
+
+
+def _require_text_box_rectangle(
+    x: float, y: float, width: float, height: float, size: float
+) -> None:
+    """Checks the same rectangle limits the engine applies before it paints."""
+    corners = (x, y, width, height, x + width, y + height)
+    if any(not math.isfinite(value) for value in corners):
+        raise HTTPException(status_code=400, detail="The rectangle is not finite.")
+    if width < 8 or height < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="The rectangle must be at least 8 points wide and 8 points tall.",
+        )
+    if any(abs(value) > 20000 for value in (x, y, x + width, y + height)):
+        raise HTTPException(
+            status_code=400,
+            detail="A rectangle coordinate is outside -20000 to 20000.",
+        )
+    if height < size:
+        raise HTTPException(
+            status_code=400,
+            detail="The rectangle is shorter than the font size.",
+        )
 
 
 @app.post(
@@ -779,6 +824,86 @@ def edit_paragraph(
         color=request.color if styled else None,
         alignment=alignment if styled else None,
         leading=request.leading if styled else None,
+    )
+
+
+@app.post(
+    "/api/documents/{doc_id}/pages/{page_idx}/text-box",
+    response_model=TextBoxResponse,
+)
+@serialized_mutation
+def add_text_box(doc_id: str, page_idx: int, request: TextBoxRequest):
+    """Appends content-stream text inside a rectangle.
+
+    The face is Helvetica, Times, or Courier. Omitted style fields become
+    Helvetica, 12 points, black, left, and a leading of 1.2 times the size.
+    The text is not a `/FreeText` annotation and not a sticky note. Lines
+    whose baseline falls below the rectangle are omitted. The path number
+    starts at 1.
+    """
+    if page_idx < 1:
+        raise HTTPException(status_code=400, detail="Page numbers in this path start at 1.")
+    session = load_session(doc_id)
+    doc = session["doc"]
+    _require_text_box_text(request.text)
+    if request.font is not None:
+        _require_style_font(request.font)
+    if request.size is not None:
+        _require_style_number(
+            request.size,
+            1,
+            144,
+            "Font size must be a finite number from 1 to 144.",
+        )
+    if request.leading is not None:
+        _require_style_number(
+            request.leading,
+            1,
+            400,
+            "Leading must be a finite number from 1 to 400.",
+        )
+    alignment = None
+    if request.alignment is not None:
+        _require_style_alignment(request.alignment)
+        alignment = request.alignment.strip().lower()
+    color = None
+    if request.color is not None:
+        color = _style_color_components(request.color)
+    size = 12.0 if request.size is None else request.size
+    _require_text_box_rectangle(request.x, request.y, request.width, request.height, size)
+    try:
+        appended = doc.add_text_box(
+            page_idx,
+            request.x,
+            request.y,
+            request.width,
+            request.height,
+            request.text,
+            font=request.font,
+            size=request.size,
+            bold=request.bold,
+            italic=request.italic,
+            color=color,
+            alignment=alignment,
+            leading=request.leading,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        detail = _text_box_failure_detail(e)
+        if detail is not None:
+            raise HTTPException(status_code=400, detail=detail) from e
+        raise _public_error(400, e)
+
+    record_document_action("text_box_added", doc_id)
+    return TextBoxResponse(
+        success=True,
+        document_id=doc_id,
+        page_number=page_idx,
+        text=request.text,
+        font_resource=str(appended["font_resource"]),
+        base_font=str(appended["base_font"]),
+        line_count=int(appended["line_count"]),
     )
 
 

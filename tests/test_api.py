@@ -3975,3 +3975,170 @@ def test_styled_paragraph_edit_uses_a_standard_face():
     assert "paragraph_styled" in actions
 
 
+def test_text_box_appends_content_text_in_a_rectangle():
+    """A text box is page content. It is not a FreeText annotation."""
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("textbox.pdf", create_minimal_pdf_bytes(), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+    url = f"/api/documents/{doc_id}/pages/1/text-box"
+    box = {"x": 72, "y": 400, "width": 120, "height": 48}
+
+    early = client.post(
+        f"/api/documents/{doc_id}/pages/0/text-box",
+        json={"text": "Hi", **box},
+    )
+    assert early.status_code == 400
+    assert early.json()["detail"] == "Page numbers in this path start at 1."
+
+    rejected = [
+        ({"text": "   ", **box}, "Text is empty."),
+        ({"text": "\n\n", **box}, "Text is empty."),
+        ({"text": "Hi\t", **box}, "Text contains a control character."),
+        ({"text": "A" * 4001, **box}, "Text is longer than 4000 characters."),
+        (
+            {"text": "Hi", "x": 72, "y": 400, "width": 4, "height": 40},
+            "The rectangle must be at least 8 points wide and 8 points tall.",
+        ),
+        (
+            {"text": "Hi", "x": 19990, "y": 400, "width": 20, "height": 40},
+            "A rectangle coordinate is outside -20000 to 20000.",
+        ),
+        (
+            {"text": "Hi", "x": 72, "y": 400, "width": 80, "height": 20, "size": 24},
+            "The rectangle is shorter than the font size.",
+        ),
+        (
+            {"text": "Hi", **box, "font": "Comic Sans"},
+            "Font must be Helvetica, Times, or Courier.",
+        ),
+        (
+            {"text": "Hi", **box, "color": "blue"},
+            "Color must be a hex color #RGB or #RRGGBB.",
+        ),
+        (
+            {"text": "Hi", **box, "alignment": "middle"},
+            "Alignment must be left, center, right, or justified.",
+        ),
+        (
+            {"text": "\nHello", "x": 72, "y": 400, "width": 80, "height": 12, "size": 12},
+            "The rectangle is too short for one line.",
+        ),
+        (
+            {"text": "Hi", "x": 72, "y": 400, "width": 80, "height": 40},
+            "Page index is out of range.",
+        ),
+    ]
+    for payload, detail in rejected[:-1]:
+        response = client.post(url, json=payload)
+        assert response.status_code == 400, payload
+        assert response.json()["detail"] == detail, payload
+    missing = client.post(
+        f"/api/documents/{doc_id}/pages/4/text-box",
+        json=rejected[-1][0],
+    )
+    assert missing.status_code == 400
+    assert missing.json()["detail"] == rejected[-1][1]
+
+    actions = {row["action"] for row in client.get("/api/audit").json()}
+    assert "text_box_added" not in actions
+    untouched = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph").json()
+    assert all("Hello" not in paragraph["text"] for paragraph in untouched["paragraphs"])
+
+    added = client.post(
+        url,
+        json={
+            "text": "Hello PDF",
+            "x": 72,
+            "y": 400,
+            "width": 40,
+            "height": 48,
+            "font": "Times",
+            "italic": True,
+            "color": "#0000FF",
+            "alignment": "center",
+            "leading": 16,
+            "size": 12,
+        },
+    )
+    assert added.status_code == 200, added.text
+    body = added.json()
+    assert body["success"] is True
+    assert body["page_number"] == 1
+    assert body["text"] == "Hello PDF"
+    assert body["font_resource"] == "F_ST_TiIt"
+    assert body["base_font"] == "Times-Italic"
+    assert body["line_count"] == 2
+
+    updated = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph").json()
+    original = next(
+        paragraph for paragraph in updated["paragraphs"] if "Contract Agreement Terms" in paragraph["text"]
+    )
+    paragraph = next(paragraph for paragraph in updated["paragraphs"] if "Hello" in paragraph["text"])
+    assert "PDF" in paragraph["text"]
+    assert paragraph["font_family"] == "Times New Roman"
+    assert paragraph["font_weight"] == 400
+    assert paragraph["font_style"] == "italic"
+    assert paragraph["alignment"] == "center"
+    assert abs(paragraph["font_size"] - 12) < 0.01
+    assert abs(paragraph["leading"] - 16) < 0.01
+    assert "Contract Agreement Terms" in original["text"]
+
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    assert b"(Hello)" in exported.content
+    assert b"(PDF)" in exported.content
+    assert b"(Contract Agreement Terms)" in exported.content
+    assert b"/Times-Italic" in exported.content
+    assert b"/F_ST_TiIt" in exported.content
+    assert b"0 0 1 rg" in exported.content
+    assert b"/FreeText" not in exported.content
+    assert b"/Annots" not in exported.content
+
+    found = client.post(f"/api/documents/{doc_id}/search", json={"query": "Hello"})
+    assert found.status_code == 200
+    assert found.json()["hit_count"] >= 1
+
+    clip_upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("clip.pdf", create_minimal_pdf_bytes(), "application/pdf")},
+    )
+    assert clip_upload.status_code == 200
+    clip_id = clip_upload.json()["document_id"]
+    clipped = client.post(
+        f"/api/documents/{clip_id}/pages/1/text-box",
+        json={
+            "text": "Hello PDF",
+            "x": 72,
+            "y": 100,
+            "width": 40,
+            "height": 20,
+            "leading": 16,
+        },
+    )
+    assert clipped.status_code == 200, clipped.text
+    assert clipped.json()["line_count"] == 1
+    assert clipped.json()["font_resource"] == "F_ST_Helv"
+    assert clipped.json()["base_font"] == "Helvetica"
+    clip_scene = client.get(f"/api/documents/{clip_id}/pages/1/scenegraph").json()
+    clip_paragraph = next(
+        paragraph for paragraph in clip_scene["paragraphs"] if "Hello" in paragraph["text"]
+    )
+    assert "PDF" not in clip_paragraph["text"]
+    assert clip_paragraph["font_family"] == "Arial"
+    clip_export = client.get(f"/api/documents/{clip_id}/export")
+    assert b"(Hello)" in clip_export.content
+    assert b"(PDF)" not in clip_export.content
+    assert b"/Helvetica" in clip_export.content
+    assert b"/F_ST_Helv" in clip_export.content
+    assert b"0 0 0 rg" in clip_export.content
+    assert b"(Contract Agreement Terms)" in clip_export.content
+    assert b"/FreeText" not in clip_export.content
+
+    audit = client.get("/api/audit").json()
+    assert "text_box_added" in {row["action"] for row in audit}
+    assert "Hello" not in str(audit)
+
+

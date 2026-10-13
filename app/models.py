@@ -104,6 +104,38 @@ class EditParagraphResponse(BaseModel):
     leading: Optional[float] = None
 
 
+class TextBoxRequest(BaseModel):
+    """Content-stream text drawn inside a rectangle.
+
+    Style fields are optional. Omitted fields become Helvetica, 12 points,
+    black, left, and a leading of 1.2 times the size. This is not a
+    `/FreeText` annotation.
+    """
+    text: str
+    x: float
+    y: float
+    width: float
+    height: float
+    font: Optional[str] = None
+    size: Optional[float] = None
+    bold: Optional[bool] = None
+    italic: Optional[bool] = None
+    color: Optional[str] = None
+    alignment: Optional[str] = None
+    leading: Optional[float] = None
+
+
+class TextBoxResponse(BaseModel):
+    """Response returned after a text box is appended to the page content."""
+    success: bool
+    document_id: str
+    page_number: int
+    text: str
+    font_resource: str
+    base_font: str
+    line_count: int
+
+
 class ImageModel(BaseModel):
     """Extracted image XObject on a page with spatial layout attributes."""
     id: int
