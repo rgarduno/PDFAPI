@@ -611,6 +611,86 @@ def get_page_rotation_endpoint(doc_id: str, page_idx: int):
 
 
 
+_STYLE_FONTS = frozenset({
+    "helvetica",
+    "arial",
+    "times",
+    "times roman",
+    "times new roman",
+    "courier",
+    "courier new",
+})
+_STYLE_ALIGNMENTS = frozenset({"left", "center", "right", "justified"})
+
+
+def _normalize_style_font(raw: str) -> str:
+    """Collapses a font token the same way the engine does."""
+    lowered = raw.strip().lower().replace("-", " ").replace("_", " ")
+    return " ".join(lowered.split())
+
+
+def _style_requested(request: EditParagraphRequest) -> bool:
+    return any(
+        value is not None
+        for value in (
+            request.font,
+            request.size,
+            request.bold,
+            request.italic,
+            request.color,
+            request.alignment,
+            request.leading,
+        )
+    )
+
+
+def _require_style_font(raw: str) -> None:
+    if _normalize_style_font(raw) not in _STYLE_FONTS:
+        raise HTTPException(
+            status_code=400,
+            detail="Font must be Helvetica, Times, or Courier.",
+        )
+
+
+def _require_style_number(value: float, low: float, high: float, detail: str) -> None:
+    if not math.isfinite(value) or value < low or value > high:
+        raise HTTPException(status_code=400, detail=detail)
+
+
+def _require_style_alignment(raw: str) -> None:
+    if raw.strip().lower() not in _STYLE_ALIGNMENTS:
+        raise HTTPException(
+            status_code=400,
+            detail="Alignment must be left, center, right, or justified.",
+        )
+
+
+def _style_color_components(raw: str) -> list[float]:
+    """Expands #RGB or #RRGGBB to three device-RGB components in 0..=1."""
+    text = raw.strip()
+    hexpart = text[1:] if text.startswith("#") else ""
+    if len(hexpart) == 3 and all(char in "0123456789abcdefABCDEF" for char in hexpart):
+        hexpart = "".join(char * 2 for char in hexpart)
+    if len(hexpart) != 6 or any(char not in "0123456789abcdefABCDEF" for char in hexpart):
+        raise HTTPException(
+            status_code=400,
+            detail="Color must be a hex color #RGB or #RRGGBB.",
+        )
+    return [int(hexpart[index:index + 2], 16) / 255.0 for index in (0, 2, 4)]
+
+
+def _style_failure_detail(exc: BaseException) -> Optional[str]:
+    """Forwards one short engine style sentence. Other failures stay generic."""
+    text = str(exc)
+    marker = text.find("Style: ")
+    if marker < 0:
+        return None
+    detail = text[marker + len("Style: "):].strip()
+    if not detail or "\n" in detail or len(detail) > 200:
+        return None
+    return detail
+
+
 @app.post(
     "/api/documents/{doc_id}/pages/{page_idx}/edit/{paragraph_id}",
     response_model=EditParagraphResponse,
@@ -619,18 +699,71 @@ def get_page_rotation_endpoint(doc_id: str, page_idx: int):
 def edit_paragraph(
     doc_id: str, page_idx: int, paragraph_id: int, request: EditParagraphRequest
 ):
-    """Performs an in-place surgical paragraph edit, recalculating reflow without altering graphics."""
+    """Performs an in-place surgical paragraph edit, recalculating reflow without altering graphics.
+
+    Optional font, size, bold, italic, color, alignment, and leading restyle the
+    replacement. A named face is Helvetica, Times, or Courier, including the
+    Arial, Times New Roman, and Courier New aliases. Bold and italic select that
+    standard face. They do not synthesize a bold twin of an embedded subset.
+    Leading is a distance in points. Omitting every style field keeps today's edit.
+    """
     session = load_session(doc_id)
 
     doc = session["doc"]
+    styled = _style_requested(request)
+    color = None
+    alignment = None
+    if styled:
+        if request.font is not None:
+            _require_style_font(request.font)
+        if request.size is not None:
+            _require_style_number(
+                request.size,
+                1,
+                144,
+                "Font size must be a finite number from 1 to 144.",
+            )
+        if request.leading is not None:
+            _require_style_number(
+                request.leading,
+                1,
+                400,
+                "Leading must be a finite number from 1 to 400.",
+            )
+        if request.alignment is not None:
+            _require_style_alignment(request.alignment)
+            alignment = request.alignment.strip().lower()
+        if request.color is not None:
+            color = _style_color_components(request.color)
     try:
-        page = doc.get_page(page_idx)
-        page.edit_paragraph(paragraph_id, request.new_text)
-        doc.update_page(page)
+        if styled:
+            doc.edit_paragraph_styled(
+                page_idx,
+                paragraph_id,
+                request.new_text,
+                font=request.font,
+                size=request.size,
+                bold=request.bold,
+                italic=request.italic,
+                color=color,
+                alignment=alignment,
+                leading=request.leading,
+            )
+        else:
+            page = doc.get_page(page_idx)
+            page.edit_paragraph(paragraph_id, request.new_text)
+            doc.update_page(page)
     except HTTPException:
         raise
     except Exception as e:
+        if styled:
+            detail = _style_failure_detail(e)
+            if detail is not None:
+                raise HTTPException(status_code=400, detail=detail) from e
         raise _public_error(400, e)
+
+    if styled:
+        record_document_action("paragraph_styled", doc_id)
 
     return EditParagraphResponse(
         success=True,
@@ -639,6 +772,13 @@ def edit_paragraph(
         paragraph_id=paragraph_id,
         updated_text=request.new_text,
         message="Paragraph surgically replaced with zero layout drift.",
+        font=request.font if styled else None,
+        size=request.size if styled else None,
+        bold=request.bold if styled else None,
+        italic=request.italic if styled else None,
+        color=request.color if styled else None,
+        alignment=alignment if styled else None,
+        leading=request.leading if styled else None,
     )
 
 

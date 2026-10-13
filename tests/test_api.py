@@ -3851,3 +3851,127 @@ def test_page_raster_png_jpeg_tiff():
     assert "page_rendered" in actions
 
 
+def test_styled_paragraph_edit_uses_a_standard_face():
+    """A styled edit selects a standard 14 face. A text-only edit does not."""
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("styled.pdf", create_minimal_pdf_bytes(), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+    scene = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph")
+    assert scene.status_code == 200
+    paragraph_id = scene.json()["paragraphs"][0]["id"]
+    url = f"/api/documents/{doc_id}/pages/1/edit/{paragraph_id}"
+
+    rejected = [
+        (
+            {"new_text": "Hi", "bold": True},
+            "The current font cannot change weight or style. Name Helvetica, Times, or Courier.",
+        ),
+        (
+            {"new_text": "Hi", "font": "Comic Sans"},
+            "Font must be Helvetica, Times, or Courier.",
+        ),
+        (
+            {"new_text": "Hi", "size": 0},
+            "Font size must be a finite number from 1 to 144.",
+        ),
+        (
+            {"new_text": "Hi", "color": "red"},
+            "Color must be a hex color #RGB or #RRGGBB.",
+        ),
+        (
+            {"new_text": "Hi", "color": "#FF0000FF"},
+            "Color must be a hex color #RGB or #RRGGBB.",
+        ),
+        (
+            {"new_text": "Hi", "alignment": "middle"},
+            "Alignment must be left, center, right, or justified.",
+        ),
+        (
+            {"new_text": "Hi", "leading": 0},
+            "Leading must be a finite number from 1 to 400.",
+        ),
+        (
+            {"new_text": "Hi", "leading": 400.1},
+            "Leading must be a finite number from 1 to 400.",
+        ),
+    ]
+    for payload, detail in rejected:
+        response = client.post(url, json=payload)
+        assert response.status_code == 400, payload
+        assert response.json()["detail"] == detail, payload
+
+    actions = {row["action"] for row in client.get("/api/audit").json()}
+    assert "paragraph_styled" not in actions
+
+    plain_upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("plain.pdf", create_minimal_pdf_bytes(), "application/pdf")},
+    )
+    assert plain_upload.status_code == 200
+    plain_id = plain_upload.json()["document_id"]
+    plain_scene = client.get(f"/api/documents/{plain_id}/pages/1/scenegraph").json()
+    plain_url = f"/api/documents/{plain_id}/pages/1/edit/{plain_scene['paragraphs'][0]['id']}"
+    plain = client.post(plain_url, json={"new_text": "Still plain."})
+    assert plain.status_code == 200
+    assert plain.json()["success"] is True
+    assert plain.json()["font"] is None
+    assert plain.json()["message"] == "Paragraph surgically replaced with zero layout drift."
+    actions = {row["action"] for row in client.get("/api/audit").json()}
+    assert "paragraph_styled" not in actions
+
+    styled = client.post(
+        url,
+        json={
+            "new_text": "Hi\nHello there",
+            "font": "Helvetica",
+            "size": 18,
+            "bold": True,
+            "color": "#FF0000",
+            "alignment": "center",
+            "leading": 20,
+        },
+    )
+    assert styled.status_code == 200, styled.text
+    body = styled.json()
+    assert body["success"] is True
+    assert body["font"] == "Helvetica"
+    assert body["size"] == 18
+    assert body["bold"] is True
+    assert body["color"] == "#FF0000"
+    assert body["alignment"] == "center"
+    assert body["leading"] == 20
+    assert "Hi" in body["updated_text"]
+
+    updated = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph").json()
+    paragraph = updated["paragraphs"][0]
+    assert "Hi" in paragraph["text"]
+    assert "Hello there" in paragraph["text"]
+    assert paragraph["font_family"] == "Arial"
+    assert paragraph["font_weight"] == 700
+    assert paragraph["font_style"] == "normal"
+    assert paragraph["alignment"] == "center"
+    assert abs(paragraph["font_size"] - 18) < 0.01
+    assert abs(paragraph["leading"] - 20) < 0.01
+
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    assert b"(Hi)" in exported.content
+    assert b"(Hello there)" in exported.content
+    assert b"/Helvetica-Bold" in exported.content
+    assert b"/F_ST_HeBo" in exported.content
+    assert b"1 0 0 rg" in exported.content
+
+    found = client.post(
+        f"/api/documents/{doc_id}/search",
+        json={"query": "Hello there"},
+    )
+    assert found.status_code == 200
+    assert found.json()["hit_count"] >= 1
+
+    actions = {row["action"] for row in client.get("/api/audit").json()}
+    assert "paragraph_styled" in actions
+
+

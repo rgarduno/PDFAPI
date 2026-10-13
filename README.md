@@ -46,6 +46,7 @@ PDFAPI is the service orchestration layer within the decoupled **PDFEngine** mul
   - Read and write MediaBox, CropBox, BleedBox, TrimBox, and ArtBox. Numbers in `/pages/{n}/boxes` start at 1.
   - `POST /api/documents/{id}/search` reads reconstructed paragraph text. The query is not stored. Audit names for this work are `pages_composed`, `page_box_updated`, and `document_searched`.
   - `GET /api/documents/{id}/pages/{n}/raster?format=png|jpeg|tiff&dpi=144` paints one page. `n` starts at 1. Density is from 36 to 300. The bitmap is capped at 12000000 pixels and a side of 65535. The painter is not Acrobat: nested clips, soft masks, transparency groups, and annotation appearances are not composited, rendering mode 3 is not painted, and TIFF is one page. The audit name is `page_rendered`.
+  - `POST /api/documents/{id}/pages/{n}/edit/{paragraph_id}` still replaces paragraph text. Optional `font`, `size`, `bold`, `italic`, `color`, `alignment`, and `leading` restyle that replacement. `font` is Helvetica, Times, or Courier (Arial, Times New Roman, and Courier New are aliases). Bold or italic selects that standard face and does not invent a bold twin of an embedded subset. `color` is `#RGB` or `#RRGGBB`. `leading` is points from 1 to 400. A size change with no leading scales the old leading, then keeps it inside `[new size, 400]`. The audit name `paragraph_styled` is recorded only when a style field is set. The new text is not stored in the audit log.
 
 ---
 

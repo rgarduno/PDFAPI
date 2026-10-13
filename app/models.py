@@ -72,8 +72,19 @@ class DocumentUploadResponse(BaseModel):
 
 
 class EditParagraphRequest(BaseModel):
-    """Payload to perform an in-place surgical paragraph edit."""
+    """Payload to perform an in-place surgical paragraph edit.
+
+    Style fields are optional. When every style field is omitted, the edit
+    keeps the current font, size, alignment, and leading and writes no color.
+    """
     new_text: str
+    font: Optional[str] = None
+    size: Optional[float] = None
+    bold: Optional[bool] = None
+    italic: Optional[bool] = None
+    color: Optional[str] = None
+    alignment: Optional[str] = None
+    leading: Optional[float] = None
 
 
 class EditParagraphResponse(BaseModel):
@@ -84,6 +95,13 @@ class EditParagraphResponse(BaseModel):
     paragraph_id: int
     updated_text: str
     message: str
+    font: Optional[str] = None
+    size: Optional[float] = None
+    bold: Optional[bool] = None
+    italic: Optional[bool] = None
+    color: Optional[str] = None
+    alignment: Optional[str] = None
+    leading: Optional[float] = None
 
 
 class ImageModel(BaseModel):
