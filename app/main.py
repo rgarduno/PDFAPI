@@ -13,7 +13,7 @@ import os
 from functools import wraps
 from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import Response
 
@@ -1849,6 +1849,69 @@ def get_page_boxes_endpoint(doc_id: str, page_idx: int):
         raise
     except Exception as e:
         raise _public_error(400, e)
+
+
+def _raster_encoding(raw: str) -> tuple[str, str, str]:
+    """Maps a raster format alias to the engine name, media type, and extension."""
+    chosen = {
+        "png": ("png", "image/png", "png"),
+        "jpeg": ("jpeg", "image/jpeg", "jpg"),
+        "jpg": ("jpeg", "image/jpeg", "jpg"),
+        "tiff": ("tiff", "image/tiff", "tif"),
+        "tif": ("tiff", "image/tiff", "tif"),
+    }.get(raw.strip().lower())
+    if chosen is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Raster format must be png, jpeg, or tiff.",
+        )
+    return chosen
+
+
+@app.get("/api/documents/{doc_id}/pages/{page_idx}/raster")
+def render_page_endpoint(
+    doc_id: str,
+    page_idx: int,
+    image_format: str = Query(default="png", alias="format"),
+    dpi: float = 144.0,
+):
+    """Paints one page to PNG, JPEG, or TIFF. The path number starts at 1.
+
+    The painter is a display approximation. Annotation appearances are not
+    composited. Rendering mode 3 is not painted. Nested clips, soft masks,
+    and transparency groups are not applied. TIFF is one page, not a stack.
+    """
+    if page_idx < 1:
+        raise HTTPException(status_code=400, detail="Page numbers in this path start at 1.")
+    rust_format, media_type, extension = _raster_encoding(image_format)
+    if not math.isfinite(dpi) or dpi < 36 or dpi > 300:
+        raise HTTPException(
+            status_code=400,
+            detail="Raster dpi must be a finite number from 36 to 300.",
+        )
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        raster = doc.render_page(page_idx - 1, rust_format, dpi)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+    record_document_action("page_rendered", doc_id)
+    return Response(
+        content=bytes(raster["bytes"]),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": _content_disposition(
+                "inline", f"page_{page_idx}.{extension}"
+            ),
+            "X-Raster-Width": str(int(raster["width"])),
+            "X-Raster-Height": str(int(raster["height"])),
+            "X-Raster-Dpi": str(raster["dpi"]),
+            "X-Raster-Omitted": str(int(raster["omitted"])),
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @app.put(

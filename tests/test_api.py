@@ -3734,3 +3734,120 @@ def test_page_composition_boxes_and_document_search():
     assert "pages_composed" in actions
     assert "page_box_updated" in actions
     assert "document_searched" in actions
+
+
+def create_raster_fixture_pdf_bytes() -> bytes:
+    """One 120 pt page: a red rectangle, Helvetica text, and a flate RGB image."""
+    pixels = bytes([
+        255, 0, 0, 0, 255, 0,
+        0, 0, 255, 255, 255, 255,
+    ])
+    encoded = zlib.compress(pixels)
+    content = (
+        b"1 0 0 rg 20 20 40 40 re f\n"
+        b"BT /F1 12 Tf 30 80 Td (Hi) Tj ET\n"
+        b"q 20 0 0 20 10 10 cm /Im Do Q\n"
+    )
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 120 120 ] "
+            b"/Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> "
+            b"/XObject << /Im 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+        f"<< /Length {len(content)} >>\nstream\n".encode() + content + b"endstream",
+        (
+            b"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 "
+            b"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode "
+            + f"/Length {len(encoded)} >>\nstream\n".encode()
+            + encoded
+            + b"\nendstream"
+        ),
+    ]
+    pdf = bytearray(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+    offsets = []
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{index} 0 obj\n".encode())
+        pdf.extend(body)
+        pdf.extend(b"\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode())
+    pdf.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return bytes(pdf)
+
+
+def test_page_raster_png_jpeg_tiff():
+    """One page becomes PNG, JPEG, or TIFF. The source PDF is not rewritten."""
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("raster.pdf", create_raster_fixture_pdf_bytes(), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    before = client.get(f"/api/documents/{doc_id}/export")
+    assert before.status_code == 200
+
+    gif = client.get(f"/api/documents/{doc_id}/pages/1/raster?format=gif")
+    assert gif.status_code == 400
+    assert gif.json()["detail"] == "Raster format must be png, jpeg, or tiff."
+
+    low = client.get(f"/api/documents/{doc_id}/pages/1/raster?dpi=0")
+    assert low.status_code == 400
+    assert low.json()["detail"] == "Raster dpi must be a finite number from 36 to 300."
+
+    high = client.get(f"/api/documents/{doc_id}/pages/1/raster?dpi=1000")
+    assert high.status_code == 400
+    assert high.json()["detail"] == "Raster dpi must be a finite number from 36 to 300."
+
+    zero = client.get(f"/api/documents/{doc_id}/pages/0/raster")
+    assert zero.status_code == 400
+    assert zero.json()["detail"] == "Page numbers in this path start at 1."
+
+    missing = client.get(f"/api/documents/{doc_id}/pages/9/raster")
+    assert missing.status_code == 400
+
+    actions = {row["action"] for row in client.get("/api/audit").json()}
+    assert "page_rendered" not in actions
+
+    png = client.get(f"/api/documents/{doc_id}/pages/1/raster?format=png&dpi=72")
+    assert png.status_code == 200
+    assert png.content.startswith(b"\x89PNG")
+    assert png.headers["content-type"].startswith("image/png")
+    assert png.headers["x-raster-width"] == "120"
+    assert png.headers["x-raster-height"] == "120"
+    assert float(png.headers["x-raster-dpi"]) == 72
+    assert png.headers["x-raster-omitted"] == "0"
+    assert 'filename="page_1.png"' in png.headers["content-disposition"]
+    assert png.headers["cache-control"] == "private, no-store"
+
+    jpeg = client.get(f"/api/documents/{doc_id}/pages/1/raster?format=jpg&dpi=72")
+    assert jpeg.status_code == 200
+    assert jpeg.content.startswith(b"\xff\xd8")
+    assert jpeg.headers["content-type"].startswith("image/jpeg")
+    assert 'filename="page_1.jpg"' in jpeg.headers["content-disposition"]
+
+    tiff = client.get(f"/api/documents/{doc_id}/pages/1/raster?format=tif&dpi=72")
+    assert tiff.status_code == 200
+    assert tiff.content.startswith(b"II*\x00")
+    assert tiff.headers["content-type"].startswith("image/tiff")
+    assert tiff.headers["x-raster-width"] == "120"
+    assert tiff.headers["x-raster-height"] == "120"
+    assert tiff.headers["x-raster-omitted"] == "0"
+    assert 'filename="page_1.tif"' in tiff.headers["content-disposition"]
+
+    after = client.get(f"/api/documents/{doc_id}/export")
+    assert after.status_code == 200
+    assert after.content == before.content
+
+    actions = {row["action"] for row in client.get("/api/audit").json()}
+    assert "page_rendered" in actions
+
+

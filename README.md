@@ -45,6 +45,7 @@ PDFAPI is the service orchestration layer within the decoupled **PDFEngine** mul
   - Page composition: insert a blank page, duplicate a page, copy pages from another session at a 0-based index, or reverse the page order.
   - Read and write MediaBox, CropBox, BleedBox, TrimBox, and ArtBox. Numbers in `/pages/{n}/boxes` start at 1.
   - `POST /api/documents/{id}/search` reads reconstructed paragraph text. The query is not stored. Audit names for this work are `pages_composed`, `page_box_updated`, and `document_searched`.
+  - `GET /api/documents/{id}/pages/{n}/raster?format=png|jpeg|tiff&dpi=144` paints one page. `n` starts at 1. Density is from 36 to 300. The bitmap is capped at 12000000 pixels and a side of 65535. The painter is not Acrobat: nested clips, soft masks, transparency groups, and annotation appearances are not composited, rendering mode 3 is not painted, and TIFF is one page. The audit name is `page_rendered`.
 
 ---
 

@@ -42,6 +42,7 @@ _ACTIONS = frozenset({
     "pages_composed",
     "page_box_updated",
     "document_searched",
+    "page_rendered",
 })
 
 logger = logging.getLogger("pdfengine.audit")
