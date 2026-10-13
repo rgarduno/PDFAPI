@@ -31,6 +31,9 @@ _ACTIONS = frozenset({
     "outlines_updated",
     "attachment_added",
     "attachment_deleted",
+    "layer_added",
+    "layer_toggled",
+    "layer_deleted",
 })
 
 logger = logging.getLogger("pdfengine.audit")

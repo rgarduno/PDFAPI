@@ -3280,3 +3280,151 @@ def test_document_attachments_workflow():
     assert final_list.json()["total_attachments"] == 1
     assert final_list.json()["attachments"][0]["name"] == "anexo_costos.csv"
 
+
+def _create_layered_pdf_bytes() -> bytes:
+    """Builds a valid 1-page PDF with two marked-content OCG blocks (/OC /L1 BDC ... EMC and /OC /L2 BDC ... EMC)."""
+    content = (
+        b"BT\n"
+        b"/F1 12 Tf\n"
+        b"72 720 Td\n"
+        b"/OC /L1 BDC\n"
+        b"(CAD Grid Overlay Layer) Tj\n"
+        b"EMC\n"
+        b"0 -60 Td\n"
+        b"/OC /L2 BDC\n"
+        b"(Primary Structural Blueprint) Tj\n"
+        b"EMC\n"
+        b"ET\n"
+    )
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] "
+        b"/Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> "
+        b"/Contents 4 0 R >>",
+        f"<< /Length {len(content)} >>\nstream\n".encode() + content + b"endstream",
+    ]
+    pdf = bytearray(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+    offsets = []
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{index} 0 obj\n".encode())
+        pdf.extend(body)
+        pdf.extend(b"\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets:
+        pdf.extend(f"{offset:010} 00000 n \n".encode())
+    pdf.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n".encode())
+    pdf.extend(f"startxref\n{xref}\n%%EOF\n".encode())
+    return bytes(pdf)
+
+
+def test_document_layers_ocg_workflow():
+    """Verify Optional Content Groups (OCG / PDF Layers) CRUD, visibility toggle, and SceneGraph filtering."""
+    pdf_bytes = _create_layered_pdf_bytes()
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("blueprint.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    # 1. Initially 0 layers
+    init_res = client.get(f"/api/documents/{doc_id}/layers")
+    assert init_res.status_code == 200
+    assert init_res.json()["total_layers"] == 0
+    assert init_res.json()["layers"] == []
+
+    # 2. Register two OCG layers bound to page 1 properties L1 and L2
+    add_l1 = client.post(
+        f"/api/documents/{doc_id}/layers",
+        json={
+            "name": "CAD Grid Overlay",
+            "visible": True,
+            "intent": ["View", "Design"],
+            "locked": False,
+            "page_number": 1,
+            "property_name": "L1",
+        },
+    )
+    assert add_l1.status_code == 200
+    assert add_l1.json()["total_layers"] == 1
+    l1_id = add_l1.json()["layers"][0]["id"]
+
+    add_l2 = client.post(
+        f"/api/documents/{doc_id}/layers",
+        json={
+            "name": "Structural Blueprint",
+            "visible": True,
+            "intent": ["View"],
+            "locked": True,
+            "page_number": 1,
+            "property_name": "L2",
+        },
+    )
+    assert add_l2.status_code == 200
+    assert add_l2.json()["total_layers"] == 2
+
+    # 3. Both layers are ON -> SceneGraph returns both paragraphs
+    sg_both = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph")
+    assert sg_both.status_code == 200
+    paras_both = sg_both.json()["paragraphs"]
+    assert len(paras_both) == 2
+    assert paras_both[0]["text"] == "CAD Grid Overlay Layer"
+    assert paras_both[1]["text"] == "Primary Structural Blueprint"
+
+    # 4. Toggle "CAD Grid Overlay" OFF -> SceneGraph filters out L1 and keeps L2 at exact coordinates
+    toggle_off = client.put(
+        f"/api/documents/{doc_id}/layers/toggle",
+        json={"target": l1_id, "visible": False},
+    )
+    assert toggle_off.status_code == 200
+    layers_after_off = toggle_off.json()["layers"]
+    assert layers_after_off[0]["visible"] is False
+    assert layers_after_off[1]["visible"] is True
+
+    sg_filtered = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph")
+    assert sg_filtered.status_code == 200
+    paras_filtered = sg_filtered.json()["paragraphs"]
+    assert len(paras_filtered) == 1
+    assert paras_filtered[0]["text"] == "Primary Structural Blueprint"
+    assert paras_filtered[0]["bbox"] == paras_both[1]["bbox"]
+
+    # 5. Export and re-upload to verify OCG state and hidden layer filtering survive serialization
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    reupload = client.post(
+        "/api/documents/upload",
+        files={"file": ("reloaded_blueprint.pdf", io.BytesIO(exported.content), "application/pdf")},
+    )
+    assert reupload.status_code == 200
+    reloaded_id = reupload.json()["document_id"]
+    reloaded_layers = client.get(f"/api/documents/{reloaded_id}/layers").json()["layers"]
+    assert len(reloaded_layers) == 2
+    assert reloaded_layers[0]["visible"] is False
+    assert reloaded_layers[1]["visible"] is True
+    reloaded_sg = client.get(f"/api/documents/{reloaded_id}/pages/1/scenegraph").json()
+    assert len(reloaded_sg["paragraphs"]) == 1
+    assert reloaded_sg["paragraphs"][0]["text"] == "Primary Structural Blueprint"
+
+    # 6. Toggle "CAD Grid Overlay" back ON -> both paragraphs appear again
+    toggle_on = client.put(
+        f"/api/documents/{doc_id}/layers/toggle",
+        json={"target": "CAD Grid Overlay", "visible": True},
+    )
+    assert toggle_on.status_code == 200
+    assert toggle_on.json()["layers"][0]["visible"] is True
+    sg_restored = client.get(f"/api/documents/{doc_id}/pages/1/scenegraph").json()
+    assert len(sg_restored["paragraphs"]) == 2
+
+    # 7. Delete layer L1 and verify 404 on second delete
+    del_res = client.delete(f"/api/documents/{doc_id}/layers/{l1_id}")
+    assert del_res.status_code == 200
+    assert del_res.json()["deleted"] is True
+
+    del_again = client.delete(f"/api/documents/{doc_id}/layers/{l1_id}")
+    assert del_again.status_code == 404
+
+

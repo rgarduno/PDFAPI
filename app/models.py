@@ -921,3 +921,46 @@ class DeleteAttachmentResponse(BaseModel):
     deleted: bool
     name: str
 
+
+class OptionalContentLayerModel(BaseModel):
+    """Represents an Optional Content Group (/Type /OCG — PDF Layer, ISO 32000-1 §8.11)."""
+    id: str = Field(description="Stable layer identifier (e.g. 'ocg_12')")
+    object_number: int = Field(description="Underlying PDF COS object number")
+    name: str = Field(description="Human-readable layer name (/Name)")
+    visible: bool = Field(description="Current visibility state (ON=True, OFF=False)")
+    intent: List[str] = Field(default_factory=list, description="Intended usage contexts (e.g. ['View', 'Design'])")
+    locked: bool = Field(default=False, description="Whether the layer is locked in UI (/Locked)")
+
+
+class DocumentLayersResponse(BaseModel):
+    """Response listing all Optional Content Groups (OCG Layers) in a document."""
+    success: bool = True
+    document_id: str
+    total_layers: int
+    layers: List[OptionalContentLayerModel]
+
+
+class AddLayerRequest(BaseModel):
+    """Request payload to create a new Optional Content Group (/Type /OCG) in the document."""
+    name: str = Field(min_length=1, max_length=255, description="Human-readable layer name")
+    visible: bool = Field(default=True, description="Initial visibility state (True=ON, False=OFF)")
+    intent: Optional[List[str]] = Field(default=None, description="Optional usage intents, e.g. ['View', 'Design']")
+    locked: bool = Field(default=False, description="Whether the layer is locked in viewer UI")
+    page_number: Optional[int] = Field(default=None, ge=1, description="Optional 1-based page number to bind a /Resources /Properties key")
+    property_name: Optional[str] = Field(default=None, description="Optional property tag name (e.g. 'L1' or 'MC0') to bind on page_number")
+
+
+class ToggleLayerRequest(BaseModel):
+    """Request payload to toggle the visibility (ON/OFF) of an Optional Content Group."""
+    target: str = Field(min_length=1, description="Layer ID (e.g. 'ocg_12') or exact layer name")
+    visible: bool = Field(description="New visibility state (True=ON, False=OFF)")
+
+
+class DeleteLayerResponse(BaseModel):
+    """Response confirming deletion of an Optional Content Group (/Type /OCG)."""
+    success: bool = True
+    document_id: str
+    deleted: bool
+    target: str
+
+

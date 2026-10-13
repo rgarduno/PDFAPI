@@ -128,6 +128,11 @@ from app.models import (
     AddAttachmentRequest,
     ExtractedAttachmentResponse,
     DeleteAttachmentResponse,
+    OptionalContentLayerModel,
+    DocumentLayersResponse,
+    AddLayerRequest,
+    ToggleLayerRequest,
+    DeleteLayerResponse,
 )
 
 app = FastAPI(
@@ -3125,4 +3130,137 @@ def delete_document_attachment_endpoint(doc_id: str, attachment_name: str):
         raise
     except Exception as e:
         raise _public_error(400, e)
+
+
+def _py_layer_to_model(layer) -> OptionalContentLayerModel:
+    return OptionalContentLayerModel(
+        id=layer.id,
+        object_number=layer.object_number,
+        name=layer.name,
+        visible=layer.visible,
+        intent=list(layer.intent),
+        locked=layer.locked,
+    )
+
+
+@app.get(
+    "/api/documents/{doc_id}/layers",
+    response_model=DocumentLayersResponse,
+)
+def list_document_layers_endpoint(doc_id: str):
+    """Lists all Optional Content Groups (/OCProperties — PDF Layers, ISO 32000-1 §8.11) in the document."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        raw_layers = doc.get_layers()
+        models = [_py_layer_to_model(layer) for layer in raw_layers]
+        return DocumentLayersResponse(
+            success=True,
+            document_id=doc_id,
+            total_layers=len(models),
+            layers=models,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.post(
+    "/api/documents/{doc_id}/layers",
+    response_model=DocumentLayersResponse,
+)
+@serialized_mutation
+def add_document_layer_endpoint(doc_id: str, request: AddLayerRequest):
+    """Creates and registers a new Optional Content Group (/Type /OCG — PDF Layer) in the document."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        created = doc.add_layer(
+            request.name,
+            request.visible,
+            request.intent,
+            request.locked,
+        )
+        if request.page_number is not None and request.property_name:
+            doc.register_page_layer_property(
+                request.page_number,
+                request.property_name,
+                created.id,
+            )
+        record_document_action("layer_added", doc_id)
+        models = [_py_layer_to_model(layer) for layer in doc.get_layers()]
+        return DocumentLayersResponse(
+            success=True,
+            document_id=doc_id,
+            total_layers=len(models),
+            layers=models,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.put(
+    "/api/documents/{doc_id}/layers/toggle",
+    response_model=DocumentLayersResponse,
+)
+@serialized_mutation
+def toggle_document_layer_endpoint(doc_id: str, request: ToggleLayerRequest):
+    """Toggles the visibility (ON/OFF) of an Optional Content Group by id or name and updates active page scene graphs."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        try:
+            doc.set_layer_visibility(request.target, request.visible)
+        except Exception as e:
+            if "not found" in str(e).lower():
+                raise HTTPException(
+                    status_code=404,
+                    detail="Requested layer was not found in the document.",
+                )
+            raise
+        record_document_action("layer_toggled", doc_id)
+        models = [_py_layer_to_model(layer) for layer in doc.get_layers()]
+        return DocumentLayersResponse(
+            success=True,
+            document_id=doc_id,
+            total_layers=len(models),
+            layers=models,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.delete(
+    "/api/documents/{doc_id}/layers/{layer_id}",
+    response_model=DeleteLayerResponse,
+)
+@serialized_mutation
+def delete_document_layer_endpoint(doc_id: str, layer_id: str):
+    """Deletes an Optional Content Group (/Type /OCG) by id or name from the document."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        deleted = doc.delete_layer(layer_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail="Requested layer was not found in the document.",
+            )
+        record_document_action("layer_deleted", doc_id)
+        return DeleteLayerResponse(
+            success=True,
+            document_id=doc_id,
+            deleted=True,
+            target=layer_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
 
