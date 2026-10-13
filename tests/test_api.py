@@ -3624,6 +3624,113 @@ def test_pdfua_accessibility_inspect_and_tag_workflow():
     assert re_data["issues"] == []
 
 
+def test_page_composition_boxes_and_document_search():
+    """Blank, duplicate, insert, reverse, page boxes, and text search.
 
+    Body indexes are 0-based. The boxes path starts at 1. The search query
+    is absent from the audit log.
+    """
+    _, upload = _upload_minimal()
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
 
+    search = client.post(
+        f"/api/documents/{doc_id}/search",
+        json={"query": "Contract", "ignore_case": False},
+    )
+    assert search.status_code == 200
+    found = search.json()
+    assert found["truncated"] is False
+    assert found["hit_count"] >= 1
+    assert found["hits"][0]["page_index"] == 0
+    assert "Contract" in found["hits"][0]["snippet"]
 
+    audit = client.get("/api/audit")
+    assert audit.status_code == 200
+    assert "Contract" not in audit.text
+    actions = {row["action"] for row in audit.json()}
+    assert "document_searched" in actions
+
+    blank = client.post(
+        f"/api/documents/{doc_id}/pages/blank",
+        json={"index": 1, "width": 200, "height": 300},
+    )
+    assert blank.status_code == 200
+    assert blank.json()["page_count"] == 2
+    assert "index 1" in blank.json()["message"]
+
+    duplicated = client.post(
+        f"/api/documents/{doc_id}/pages/duplicate",
+        json={"source_index": 0, "insert_at": 1},
+    )
+    assert duplicated.status_code == 200
+    assert duplicated.json()["page_count"] == 3
+
+    boxes = client.get(f"/api/documents/{doc_id}/pages/1/boxes")
+    assert boxes.status_code == 200
+    boxes_body = boxes.json()
+    assert boxes_body["page_index"] == 0
+    assert boxes_body["page_number"] == 1
+    assert boxes_body["media"] == [0, 0, 612, 792]
+
+    missing = client.get(f"/api/documents/{doc_id}/pages/0/boxes")
+    assert missing.status_code == 400
+    assert "start at 1" in missing.json()["detail"]
+
+    crop = client.put(
+        f"/api/documents/{doc_id}/pages/1/boxes",
+        json={"kind": "crop", "rect": [72, 72, 400, 500]},
+    )
+    assert crop.status_code == 200
+    assert crop.json()["crop"] == [72, 72, 400, 500]
+
+    outside = client.put(
+        f"/api/documents/{doc_id}/pages/1/boxes",
+        json={"kind": "crop", "rect": [700, 700, 800, 800]},
+    )
+    assert outside.status_code == 400
+
+    still = client.get(f"/api/documents/{doc_id}/pages/1/boxes")
+    assert still.status_code == 200
+    assert still.json()["crop"] == [72, 72, 400, 500]
+
+    reversed_pages = client.post(f"/api/documents/{doc_id}/pages/reverse")
+    assert reversed_pages.status_code == 200
+    assert reversed_pages.json()["page_count"] == 3
+
+    _, second = _upload_minimal("other.pdf")
+    assert second.status_code == 200
+    other_id = second.json()["document_id"]
+
+    inserted = client.post(
+        f"/api/documents/{doc_id}/pages/insert",
+        json={"source_doc_id": other_id, "source_indices": [0], "insert_at": 1},
+    )
+    assert inserted.status_code == 200
+    assert inserted.json()["page_count"] == 4
+
+    other_reverse = client.post(f"/api/documents/{other_id}/pages/reverse")
+    assert other_reverse.status_code == 200
+    assert other_reverse.json()["page_count"] == 1
+
+    same = client.post(
+        f"/api/documents/{doc_id}/pages/insert",
+        json={"source_doc_id": doc_id, "source_indices": [0], "insert_at": 0},
+    )
+    assert same.status_code == 400
+    assert "duplicate" in same.json()["detail"]
+
+    empty = client.post(f"/api/documents/{doc_id}/search", json={"query": ""})
+    assert empty.status_code == 422
+
+    short = client.put(
+        f"/api/documents/{doc_id}/pages/1/boxes",
+        json={"kind": "crop", "rect": [1, 2, 3]},
+    )
+    assert short.status_code == 400
+    assert "four" in short.json()["detail"]
+
+    actions = {row["action"] for row in client.get("/api/audit").json()}
+    assert "pages_composed" in actions
+    assert "page_box_updated" in actions
+    assert "document_searched" in actions

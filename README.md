@@ -42,6 +42,9 @@ PDFAPI is the service orchestration layer within the decoupled **PDFEngine** mul
   - Archival validation and conversion for PDF/A-1b and PDF/A-2b (ISO 19005).
   - Bidirectional metadata editor and synchronizer (`/Info` and XMP RDF packages).
   - Semantic and visual PDF Diff Engine powered by LCS algorithms.
+  - Page composition: insert a blank page, duplicate a page, copy pages from another session at a 0-based index, or reverse the page order.
+  - Read and write MediaBox, CropBox, BleedBox, TrimBox, and ArtBox. Numbers in `/pages/{n}/boxes` start at 1.
+  - `POST /api/documents/{id}/search` reads reconstructed paragraph text. The query is not stored. Audit names for this work are `pages_composed`, `page_box_updated`, and `document_searched`.
 
 ---
 

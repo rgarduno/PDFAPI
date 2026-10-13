@@ -322,6 +322,73 @@ class PageOperationResponse(BaseModel):
     message: str
 
 
+class InsertBlankPageRequest(BaseModel):
+    """Insert an empty page. ``index`` is 0-based and may equal the page count."""
+    index: int = Field(ge=0)
+    width: float = Field(default=612, gt=0, le=14400)
+    height: float = Field(default=792, gt=0, le=14400)
+
+
+class DuplicatePageRequest(BaseModel):
+    """Copy one page inside the same document. Both indexes are 0-based."""
+    source_index: int = Field(ge=0)
+    insert_at: int = Field(ge=0)
+
+
+class InsertPagesRequest(BaseModel):
+    """Copy pages from another session. Indexes in the body are 0-based."""
+    source_doc_id: str
+    source_indices: List[int] = Field(min_length=1, max_length=200)
+    insert_at: int = Field(ge=0)
+
+
+class SetPageBoxRequest(BaseModel):
+    """Write or clear one page box. ``rect`` is ``[x0, y0, x1, y1]`` in points."""
+    kind: str = Field(min_length=1, max_length=32)
+    rect: Optional[List[float]] = None
+
+
+class PageBoxesResponse(BaseModel):
+    """The five ISO 32000-1 page boxes. ``page_index`` is 0-based."""
+    document_id: str
+    page_index: int
+    page_number: int
+    media: List[float]
+    crop: Optional[List[float]] = None
+    bleed: Optional[List[float]] = None
+    trim: Optional[List[float]] = None
+    art: Optional[List[float]] = None
+
+
+class TextSearchRequest(BaseModel):
+    """Search reconstructed paragraph text. The query is not stored."""
+    query: str = Field(min_length=1, max_length=512)
+    ignore_case: bool = True
+    max_hits: int = Field(default=100, ge=1, le=500)
+
+
+class TextSearchHitModel(BaseModel):
+    """One match. Offsets count Unicode scalars in the paragraph."""
+    page_index: int
+    paragraph_id: int
+    char_start: int
+    char_end: int
+    snippet: str
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+
+
+class TextSearchResponse(BaseModel):
+    """Search hits. ``truncated`` means the hit cap stopped the scan."""
+    document_id: str
+    hit_count: int
+    truncated: bool
+    pages_skipped: List[int]
+    hits: List[TextSearchHitModel]
+
+
 class AnnotationModel(BaseModel):
     """Structured representation of a PDF annotation."""
     id: int

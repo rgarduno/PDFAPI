@@ -60,6 +60,7 @@ from app.models import (
     CreateFormFieldResponse,
     DeleteFormFieldResponse,
     DeletePagesRequest,
+    DuplicatePageRequest,
     DetectedFormFieldCandidateModel,
     DetectFormFieldsResponse,
     DocumentFormsResponse,
@@ -74,9 +75,12 @@ from app.models import (
     UpdateFormFieldRequest,
     UpdateFormFieldResponse,
     ImageModel,
+    InsertBlankPageRequest,
+    InsertPagesRequest,
     MergeDocumentsRequest,
     MergeDocumentsResponse,
     PageAnnotationsResponse,
+    PageBoxesResponse,
     PageImagesResponse,
     PageOperationResponse,
     PageOverviewItem,
@@ -85,6 +89,7 @@ from app.models import (
     ReorderPagesRequest,
     RotatePageRequest,
     RotatePageResponse,
+    SetPageBoxRequest,
     SplitDocumentRequest,
     SplitDocumentResponse,
     WatermarkActionResponse,
@@ -105,6 +110,9 @@ from app.models import (
     SecurityActionResponse,
     TableCellModel,
     TableModel,
+    TextSearchHitModel,
+    TextSearchRequest,
+    TextSearchResponse,
     PageTablesResponse,
     TableExportResponse,
     OptimizeRequest,
@@ -1691,6 +1699,212 @@ def delete_pages_endpoint(doc_id: str, request: DeletePagesRequest):
             document_id=doc_id,
             page_count=doc.page_count(),
             message=f"Deleted {len(request.page_indices)} page(s) successfully.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+def _rect_list(value) -> Optional[List[float]]:
+    """Turn an engine box into four floats. ``None`` stays ``None``."""
+    if value is None:
+        return None
+    return [float(item) for item in value]
+
+
+def _page_boxes_response(doc_id: str, page_index: int, boxes) -> PageBoxesResponse:
+    """Map the engine box dict onto the public response. ``page_index`` is 0-based."""
+    media = _rect_list(boxes["media"]) or []
+    return PageBoxesResponse(
+        document_id=doc_id,
+        page_index=page_index,
+        page_number=page_index + 1,
+        media=media,
+        crop=_rect_list(boxes.get("crop")),
+        bleed=_rect_list(boxes.get("bleed")),
+        trim=_rect_list(boxes.get("trim")),
+        art=_rect_list(boxes.get("art")),
+    )
+
+
+def _require_box_corners(rect: Optional[List[float]]) -> Optional[List[float]]:
+    """Accept four finite corners, or ``None`` when the caller is clearing a box."""
+    if rect is None:
+        return None
+    if len(rect) != 4 or any(not math.isfinite(float(value)) for value in rect):
+        raise HTTPException(status_code=400, detail="A page box needs four finite numbers.")
+    return [float(value) for value in rect]
+
+
+@app.post("/api/documents/{doc_id}/pages/blank", response_model=PageOperationResponse)
+@serialized_mutation
+def insert_blank_page_endpoint(doc_id: str, request: InsertBlankPageRequest):
+    """Inserts an empty page. Body indexes are 0-based. The page count appends."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        landed = doc.insert_blank_page(request.index, request.width, request.height)
+        record_document_action("pages_composed", doc_id)
+        return PageOperationResponse(
+            success=True,
+            document_id=doc_id,
+            page_count=doc.page_count(),
+            message=f"Blank page inserted at index {landed}.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.post("/api/documents/{doc_id}/pages/duplicate", response_model=PageOperationResponse)
+@serialized_mutation
+def duplicate_page_endpoint(doc_id: str, request: DuplicatePageRequest):
+    """Copies one page inside this document. Both indexes are 0-based."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        landed = doc.duplicate_page(request.source_index, request.insert_at)
+        record_document_action("pages_composed", doc_id)
+        return PageOperationResponse(
+            success=True,
+            document_id=doc_id,
+            page_count=doc.page_count(),
+            message=f"Page duplicated at index {landed}.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.post("/api/documents/{doc_id}/pages/insert", response_model=PageOperationResponse)
+def insert_pages_endpoint(doc_id: str, request: InsertPagesRequest):
+    """Copies pages from another session at a 0-based index.
+
+    The same document is rejected before either lock is taken. A copy inside
+    one file uses duplicate. Both documents are locked in id order.
+    """
+    if request.source_doc_id == doc_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Use duplicate to copy a page inside the same document.",
+        )
+    if any(index < 0 for index in request.source_indices):
+        raise HTTPException(status_code=400, detail="Source page indexes start at 0.")
+    try:
+        with document_mutations([doc_id, request.source_doc_id]) as sessions:
+            dest = sessions[0]["doc"]
+            source = sessions[1]["doc"]
+            inserted = dest.insert_pages(source, request.source_indices, request.insert_at)
+            record_document_action("pages_composed", doc_id)
+            return PageOperationResponse(
+                success=True,
+                document_id=doc_id,
+                page_count=dest.page_count(),
+                message=f"Inserted {inserted} page(s) at index {request.insert_at}.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.post("/api/documents/{doc_id}/pages/reverse", response_model=PageOperationResponse)
+@serialized_mutation
+def reverse_pages_endpoint(doc_id: str):
+    """Reverses page order. Fewer than two pages leaves the document unchanged."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        doc.reverse_pages()
+        record_document_action("pages_composed", doc_id)
+        return PageOperationResponse(
+            success=True,
+            document_id=doc_id,
+            page_count=doc.page_count(),
+            message="Pages reversed.",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.get(
+    "/api/documents/{doc_id}/pages/{page_idx}/boxes",
+    response_model=PageBoxesResponse,
+)
+def get_page_boxes_endpoint(doc_id: str, page_idx: int):
+    """Reads the five page boxes. The path number starts at 1, like the scene graph."""
+    if page_idx < 1:
+        raise HTTPException(status_code=400, detail="Page numbers in this path start at 1.")
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        boxes = doc.page_boxes(page_idx - 1)
+        return _page_boxes_response(doc_id, page_idx - 1, boxes)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.put(
+    "/api/documents/{doc_id}/pages/{page_idx}/boxes",
+    response_model=PageBoxesResponse,
+)
+@serialized_mutation
+def set_page_box_endpoint(doc_id: str, page_idx: int, request: SetPageBoxRequest):
+    """Writes or clears one page box on that page. The path number starts at 1.
+
+    ``rect`` omitted clears crop, bleed, trim, or art on this page only.
+    MediaBox cannot be removed.
+    """
+    if page_idx < 1:
+        raise HTTPException(status_code=400, detail="Page numbers in this path start at 1.")
+    corners = _require_box_corners(request.rect)
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        boxes = doc.set_page_box(page_idx - 1, request.kind, corners)
+        record_document_action("page_box_updated", doc_id)
+        return _page_boxes_response(doc_id, page_idx - 1, boxes)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.post("/api/documents/{doc_id}/search", response_model=TextSearchResponse)
+def search_document_endpoint(doc_id: str, request: TextSearchRequest):
+    """Searches reconstructed paragraph text. The query is not written to the audit log."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        report = doc.search_text(request.query, request.ignore_case, request.max_hits)
+        record_document_action("document_searched", doc_id)
+        hits = [
+            TextSearchHitModel(
+                page_index=int(hit["page_index"]),
+                paragraph_id=int(hit["paragraph_id"]),
+                char_start=int(hit["char_start"]),
+                char_end=int(hit["char_end"]),
+                snippet=str(hit["snippet"]),
+                min_x=float(hit["min_x"]),
+                min_y=float(hit["min_y"]),
+                max_x=float(hit["max_x"]),
+                max_y=float(hit["max_y"]),
+            )
+            for hit in report["hits"]
+        ]
+        return TextSearchResponse(
+            document_id=doc_id,
+            hit_count=len(hits),
+            truncated=bool(report["truncated"]),
+            pages_skipped=[int(index) for index in report["pages_skipped"]],
+            hits=hits,
         )
     except HTTPException:
         raise

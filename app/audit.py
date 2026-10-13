@@ -39,6 +39,9 @@ _ACTIONS = frozenset({
     "document_exported_markdown",
     "pdfua_inspected",
     "pdfua_tagged",
+    "pages_composed",
+    "page_box_updated",
+    "document_searched",
 })
 
 logger = logging.getLogger("pdfengine.audit")
