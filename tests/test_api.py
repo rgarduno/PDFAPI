@@ -3556,5 +3556,74 @@ def test_export_docx_and_markdown_workflow():
         assert "<w:tbl>" in doc_xml
 
 
+def test_pdfua_accessibility_inspect_and_tag_workflow():
+    """Tests ISO 14289-1 (PDF/UA-1) accessibility inspection, automatic semantic structure tree tagging, and roundtrip persistence."""
+    pdf_bytes = create_pdf_with_table_bytes()
+    upload_res = client.post(
+        "/api/documents/upload",
+        files={"file": ("untagged_table.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload_res.status_code == 200
+    doc_id = upload_res.json()["document_id"]
+
+    # 1. Inspect untagged document -> non-compliant, missing MarkInfo / StructTreeRoot / Lang / XMP
+    inspect_res = client.get(f"/api/documents/{doc_id}/pdfua")
+    assert inspect_res.status_code == 200
+    initial_data = inspect_res.json()
+    assert initial_data["document_id"] == doc_id
+    assert initial_data["is_compliant"] is False
+    assert initial_data["is_tagged"] is False
+    assert initial_data["total_elements"] == 0
+    issue_codes = {i["code"] for i in initial_data["issues"]}
+    assert "MISSING_MARK_INFO" in issue_codes
+    assert "MISSING_STRUCT_TREE_ROOT" in issue_codes
+    assert "MISSING_LANG" in issue_codes
+    assert "MISSING_PDFUA_XMP" in issue_codes
+
+    # 2. Apply automatic PDF/UA-1 semantic tagging
+    tag_res = client.post(
+        f"/api/documents/{doc_id}/pdfua/tag",
+        json={
+            "lang": "es-MX",
+            "title": "Reporte Financiero Accesible",
+            "figure_alt_fallback": "Ilustracion del documento",
+        },
+    )
+    assert tag_res.status_code == 200
+    tagged_data = tag_res.json()
+    assert tagged_data["is_compliant"] is True
+    assert tagged_data["is_tagged"] is True
+    assert tagged_data["lang"] == "es-MX"
+    assert tagged_data["title"] == "Reporte Financiero Accesible"
+    assert tagged_data["display_doc_title"] is True
+    assert tagged_data["has_pdfua_xmp"] is True
+    assert tagged_data["issues"] == []
+    assert tagged_data["total_elements"] >= 7
+    assert tagged_data["role_map"].get("Heading1") == "H1"
+    assert len(tagged_data["elements"]) == 1
+    assert tagged_data["elements"][0]["struct_type"] == "Document"
+    assert tagged_data["elements"][0]["children"][0]["struct_type"] == "Sect"
+
+    # 3. Export tagged PDF and re-upload to verify structure tree persists across save/load roundtrip
+    exp_res = client.get(f"/api/documents/{doc_id}/export")
+    assert exp_res.status_code == 200
+    reupload_res = client.post(
+        "/api/documents/upload",
+        files={"file": ("tagged_roundtrip.pdf", io.BytesIO(exp_res.content), "application/pdf")},
+    )
+    assert reupload_res.status_code == 200
+    re_id = reupload_res.json()["document_id"]
+
+    reinspect = client.get(f"/api/documents/{re_id}/pdfua")
+    assert reinspect.status_code == 200
+    re_data = reinspect.json()
+    assert re_data["is_compliant"] is True
+    assert re_data["is_tagged"] is True
+    assert re_data["lang"] == "es-MX"
+    assert re_data["title"] == "Reporte Financiero Accesible"
+    assert re_data["issues"] == []
+
+
+
 
 

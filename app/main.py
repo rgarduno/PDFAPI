@@ -136,6 +136,10 @@ from app.models import (
     HardFlattenRequest,
     HardFlattenResponse,
     MarkdownExportResponse,
+    StructureElementModel,
+    PdfUaValidationIssueModel,
+    PdfUaTaggingRequest,
+    PdfUaReportResponse,
 )
 
 app = FastAPI(
@@ -3352,6 +3356,62 @@ def export_document_markdown_endpoint(doc_id: str, download: bool = False):
             document_id=doc_id,
             format="markdown",
             content=md_content,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.get(
+    "/api/documents/{doc_id}/pdfua",
+    response_model=PdfUaReportResponse,
+)
+@serialized_mutation
+def inspect_document_pdfua_endpoint(doc_id: str):
+    """Inspects the logical structure tree (/StructTreeRoot) and validates ISO 14289-1 (PDF/UA-1) accessibility compliance."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        report = doc.inspect_pdfua()
+        record_document_action("pdfua_inspected", doc_id)
+        return PdfUaReportResponse(
+            success=True,
+            document_id=doc_id,
+            **report,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
+@app.post(
+    "/api/documents/{doc_id}/pdfua/tag",
+    response_model=PdfUaReportResponse,
+)
+@serialized_mutation
+def apply_document_pdfua_tagging_endpoint(
+    doc_id: str,
+    request: Optional[PdfUaTaggingRequest] = None,
+):
+    """Automatically constructs a semantic /StructTreeRoot (/Document, /Sect, /H1-/H3, /P, /Table, /Figure),
+    /RoleMap, /MarkInfo, /ViewerPreferences, /Lang, and pdfuaid:part XMP metadata stream for ISO 14289-1 (PDF/UA-1) compliance.
+    """
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        req = request or PdfUaTaggingRequest()
+        report = doc.apply_pdfua_structure(
+            lang=req.lang,
+            title=req.title,
+            figure_alt_fallback=req.figure_alt_fallback,
+        )
+        record_document_action("pdfua_tagged", doc_id)
+        return PdfUaReportResponse(
+            success=True,
+            document_id=doc_id,
+            **report,
         )
     except HTTPException:
         raise

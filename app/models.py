@@ -991,4 +991,62 @@ class MarkdownExportResponse(BaseModel):
     content: str
 
 
+class StructureElementModel(BaseModel):
+    """Logical structure element (/StructElem) in the PDF/UA accessibility tree."""
+    struct_type: str
+    title: Optional[str] = None
+    alt_text: Optional[str] = None
+    actual_text: Optional[str] = None
+    lang: Optional[str] = None
+    page_number: Optional[int] = None
+    mcids: List[int] = Field(default_factory=list)
+    children: List["StructureElementModel"] = Field(default_factory=list)
+
+
+StructureElementModel.model_rebuild()
+
+
+class PdfUaValidationIssueModel(BaseModel):
+    """Single ISO 14289-1 (PDF/UA-1) accessibility validation finding."""
+    code: str
+    description: str
+    clause: str
+
+
+class PdfUaTaggingRequest(BaseModel):
+    """Request payload for automatic ISO 14289-1 (PDF/UA-1) semantic structure tagging."""
+    lang: str = Field(
+        default="en-US",
+        min_length=2,
+        max_length=32,
+        description="Primary natural language BCP-47 tag (e.g. 'en-US', 'es-MX').",
+    )
+    title: Optional[str] = Field(
+        default=None,
+        max_length=512,
+        description="Optional document title override for /Info /Title and XMP dc:title.",
+    )
+    figure_alt_fallback: str = Field(
+        default="Document figure or illustration",
+        max_length=512,
+        description="Fallback /Alt description for /Figure structure elements.",
+    )
+
+
+class PdfUaReportResponse(BaseModel):
+    """Response containing the ISO 14289-1 (PDF/UA-1) accessibility inspection and structure tree."""
+    success: bool = True
+    document_id: str
+    is_compliant: bool
+    is_tagged: bool
+    lang: Optional[str] = None
+    title: Optional[str] = None
+    display_doc_title: bool
+    has_pdfua_xmp: bool
+    role_map: dict[str, str] = Field(default_factory=dict)
+    total_elements: int
+    elements: List[StructureElementModel] = Field(default_factory=list)
+    issues: List[PdfUaValidationIssueModel] = Field(default_factory=list)
+
+
 
