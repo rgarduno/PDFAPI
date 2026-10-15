@@ -1273,28 +1273,32 @@ def _optimization_refusal(exc: Exception) -> Optional[HTTPException]:
 
 
 def _download_bytes(doc):
-    """Returns stored bytes while a PKCS#7 signature still verifies.
+    """Serializes the document for download.
 
-    An attestation is rewritten so its digest is sealed again. A full rewrite
-    would move a PKCS#7 byte range, so that download returns the stored file.
-    Later edits stay out of that download until the signature no longer verifies.
+    A detached PKCS#7 file keeps its signed bytes and appends later edits
+    after that range. Those new bytes are not covered. An unmodified signed
+    file is returned unchanged. An encrypted PKCS#7 file is not rewritten.
+    An attestation is rewritten and resealed.
     """
     try:
-        signatures = doc.verify_signatures()
-    except Exception:
-        signatures = ()
-    for sig in signatures:
-        if sig.sub_filter == "adbe.pkcs7.detached" and sig.byte_range_valid:
-            return doc.raw_bytes()
-    return doc.save_to_bytes()
+        return doc.save_to_bytes()
+    except Exception as exc:
+        if "Incremental save is refused for an encrypted PKCS#7 document." in str(exc):
+            raise HTTPException(
+                status_code=409,
+                detail="Incremental save is refused for an encrypted PKCS#7 document.",
+            ) from exc
+        raise
 
 
 @app.get("/api/documents/{doc_id}/export")
 def export_document(doc_id: str, optimized: bool = False):
     """Serializes the edited document into a downloadable PDF binary.
 
-    A still-valid detached PKCS#7 signature is downloaded as stored. An
-    attestation is rewritten and resealed.
+    A download of a detached PKCS#7 file appends edits after the signed bytes.
+    The original byte range still verifies. The new bytes are not covered. An
+    encrypted PKCS#7 file is not rewritten. An attestation is rewritten and
+    resealed.
     """
     session = load_session(doc_id)
 

@@ -765,7 +765,9 @@ class SignatureModel(BaseModel):
 
     contents_hex is the SHA-256 digest for PDFEngine.sha256, and the CMS bytes
     (including zero padding) for adbe.pkcs7.detached. byte_range_valid checks
-    that CMS against the certificate embedded in it. It is not a trust decision.
+    that CMS against the stated byte range and the certificate embedded in it.
+    The range may end before the end of the file. Bytes after it are not
+    covered. It is not a trust decision.
     """
     field_name: str
     signer_name: str

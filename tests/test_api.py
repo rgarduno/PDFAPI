@@ -2243,7 +2243,11 @@ def _audit_actions():
 
 
 def test_pem_credentials_write_a_detached_pkcs7_signature():
-    """PEM material produces a detached CMS signature that survives download."""
+    """PEM material produces a detached CMS signature that survives download.
+
+    A later metadata edit is appended after the signed bytes. The original
+    byte range still verifies, and the new title is in the download.
+    """
     cert, key, _p12, _password = _rsa_material()
     doc_id = _document_id()
     signed = client.post(
@@ -2302,6 +2306,32 @@ def test_pem_credentials_write_a_detached_pkcs7_signature():
     checked = client.get(f"/api/documents/{damaged_id}/security/signatures")
     assert checked.status_code == 200
     assert checked.json()[0]["byte_range_valid"] is False
+
+    updated = client.put(
+        f"/api/documents/{doc_id}/metadata",
+        json={"title": "Anexo firmado"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["metadata"]["title"] == "Anexo firmado"
+
+    revised = client.get(f"/api/documents/{doc_id}/export")
+    assert revised.status_code == 200
+    assert revised.content.startswith(exported.content)
+    assert len(revised.content) > len(exported.content)
+    assert b"Anexo firmado" in revised.content
+
+    again = client.post(
+        "/api/documents/upload",
+        files={"file": ("revised.pdf", revised.content, "application/pdf")},
+    )
+    assert again.status_code == 200
+    again_id = again.json()["document_id"]
+    kept = client.get(f"/api/documents/{again_id}/security/signatures")
+    assert kept.status_code == 200
+    assert kept.json()[0]["byte_range_valid"] is True
+    visible = client.get(f"/api/documents/{again_id}/metadata")
+    assert visible.status_code == 200
+    assert visible.json()["metadata"]["title"] == "Anexo firmado"
 
 
 def test_pkcs12_credentials_write_a_detached_pkcs7_signature():

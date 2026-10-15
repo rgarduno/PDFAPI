@@ -30,7 +30,7 @@ PDFAPI is the service orchestration layer within the decoupled **PDFEngine** mul
   - Atomic in-place replacement of text nodes within the page content stream without recompiling or altering non-edited vector artwork, blend modes, or images.
   - Dedicated WebSocket endpoint (`/ws/documents/{id}/pages/{page}/reflow`) for live line-wrap and bounding box calculations as the user types.
 - **Enterprise Security & Electronic Signatures**:
-  - Detached PKCS#7 / CMS (RFC 5652) digital signatures with RSA and ECDSA keys (PEM and PKCS#12 containers).
+  - Detached PKCS#7 / CMS (RFC 5652) digital signatures with RSA and ECDSA keys (PEM and PKCS#12 containers). A download of a detached PKCS#7 file appends edits after the signed bytes. The original byte range still verifies. The new bytes are not covered. An encrypted PKCS#7 file is not rewritten.
   - RFC 3161 Time-Stamp Protocol (TSA) client support embedded into unsigned CMS attributes.
   - Non-contiguous `/ByteRange` SHA-256 integrity attestation.
 - **Tamper-Evident Audit Trail**:
