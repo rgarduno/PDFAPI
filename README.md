@@ -38,7 +38,7 @@ PDFAPI is the service orchestration layer within the decoupled **PDFEngine** mul
   - In-memory structured audit logger recording critical operational events (`document_uploaded`, `redacted`, `signed`, `documents_compared`, etc.) without leaking credentials or sensitive file bytes.
 - **Enterprise PDF Operations**:
   - High-precision table extraction (Lattice & Stream algorithms) with multi-format export (JSON, CSV, Markdown, HTML).
-  - Surgical redaction of PII (RFC, CURP, SSN, Credit Cards) with full COS tree sanitation.
+  - Surgical redaction of PII (RFC, CURP, SSN, Credit Cards) with full COS tree sanitation. Redaction of a page string also removes an embedded file whose name, filename, description, or bytes repeat that string when it is at least 4 characters. The whole file is removed. Another value is left. A match on one page removes that file from the whole document. One embedded PDF is opened and its page text is searched; a file inside that PDF is not. Zip and Office files are not unpacked.
   - Invisible searchable text layer injection (`3 Tr` rendering mode) over scanned pages via local Tesseract OCR.
   - Archival validation and conversion for PDF/A-1b and PDF/A-2b (ISO 19005).
   - Bidirectional metadata editor and synchronizer (`/Info` and XMP RDF packages).

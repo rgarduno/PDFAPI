@@ -1112,6 +1112,80 @@ def test_redaction_and_sanitization_workflow():
     assert sanitize_resp.json()["success"] is True
 
 
+def test_redaction_removes_embedded_file_that_repeats_the_text():
+    """An attachment that repeats a redacted email is deleted. A different file stays."""
+    pdf = bytearray()
+    pdf.extend(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+    off1 = len(pdf)
+    pdf.extend(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+    off2 = len(pdf)
+    pdf.extend(b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n")
+    off3 = len(pdf)
+    pdf.extend(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents 4 0 R >>\nendobj\n"
+    )
+    off4 = len(pdf)
+    stream = b"BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(Contact agent at classified@intel.gov) Tj\nET\n"
+    pdf.extend(f"4 0 obj\n<< /Length {len(stream)} >>\nstream\n".encode())
+    pdf.extend(stream)
+    pdf.extend(b"\nendstream\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(b"xref\n0 5\n0000000000 65535 f \n")
+    for offset in (off1, off2, off3, off4):
+        pdf.extend(f"{offset:010} 00000 n \n".encode())
+    pdf.extend(b"trailer\n<< /Size 5 /Root 1 0 R >>\n")
+    pdf.extend(f"startxref\n{xref}\n%%EOF\n".encode())
+
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("classified.pdf", io.BytesIO(bytes(pdf)), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    leak = client.post(
+        f"/api/documents/{doc_id}/attachments",
+        json={
+            "name": "note.txt",
+            "content_base64": base64.b64encode(b"agent classified@intel.gov").decode("ascii"),
+            "mime_type": "text/plain",
+        },
+    )
+    assert leak.status_code == 200
+    clean = client.post(
+        f"/api/documents/{doc_id}/attachments",
+        json={
+            "name": "totals.txt",
+            "content_base64": base64.b64encode(b"quarterly totals").decode("ascii"),
+            "mime_type": "text/plain",
+        },
+    )
+    assert clean.status_code == 200
+
+    redacted = client.post(
+        f"/api/documents/{doc_id}/redact/pattern",
+        json={"pattern_type": "email"},
+    )
+    assert redacted.status_code == 200
+    assert redacted.json()["success"] is True
+
+    listed = client.get(f"/api/documents/{doc_id}/attachments")
+    assert listed.status_code == 200
+    body = listed.json()
+    assert body["total_attachments"] == 1
+    assert [item["name"] for item in body["attachments"]] == ["totals.txt"]
+
+    missing = client.get(f"/api/documents/{doc_id}/attachments/note.txt")
+    assert missing.status_code == 404
+    kept = client.get(f"/api/documents/{doc_id}/attachments/totals.txt")
+    assert kept.status_code == 200
+    assert base64.b64decode(kept.json()["content_base64"]) == b"quarterly totals"
+
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    assert b"classified@intel.gov" not in exported.content
+
+
 def test_security_and_digital_signatures_workflow():
     """Validates encryption, permissions, decryption, and digital signatures API workflow."""
     pdf_bytes = create_minimal_pdf_bytes()
