@@ -4142,3 +4142,85 @@ def test_text_box_appends_content_text_in_a_rectangle():
     assert "Hello" not in str(audit)
 
 
+def test_replace_rewrites_reconstructed_text_or_changes_nothing():
+    """Find-and-replace keeps a fontless WinAnsi paragraph and writes nothing on a bad character."""
+    _, upload = _upload_minimal("replace.pdf")
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    omega = client.post(
+        f"/api/documents/{doc_id}/replace",
+        json={"query": "Agreement", "replacement": "\u03a9"},
+    )
+    assert omega.status_code == 400, omega.text
+    assert omega.json()["detail"] == "A character on page 1 is not in the standard fonts."
+
+    tab = client.post(
+        f"/api/documents/{doc_id}/replace",
+        json={"query": "Agreement", "replacement": "A\tB"},
+    )
+    assert tab.status_code == 400, tab.text
+    assert tab.json()["detail"] == "The replacement contains a control character."
+
+    empty = client.post(
+        f"/api/documents/{doc_id}/replace",
+        json={"query": "", "replacement": "Accord"},
+    )
+    assert empty.status_code == 422
+
+    too_long = client.post(
+        f"/api/documents/{doc_id}/replace",
+        json={"query": "Agreement", "replacement": "B" * 4001},
+    )
+    assert too_long.status_code == 422
+
+    bad_hits = client.post(
+        f"/api/documents/{doc_id}/replace",
+        json={"query": "Agreement", "replacement": "Accord", "max_hits": 0},
+    )
+    assert bad_hits.status_code == 422
+
+    unchanged = client.get(f"/api/documents/{doc_id}/export")
+    assert unchanged.status_code == 200
+    assert b"Agreement" in unchanged.content
+    assert "text_replaced" not in {row["action"] for row in client.get("/api/audit").json()}
+
+    missing = client.post(
+        f"/api/documents/{doc_id}/replace",
+        json={"query": "zzzz", "replacement": "other"},
+    )
+    assert missing.status_code == 200, missing.text
+    assert missing.json()["replacements"] == 0
+    assert missing.json()["paragraphs"] == 0
+    assert "text_replaced" not in {row["action"] for row in client.get("/api/audit").json()}
+
+    replaced = client.post(
+        f"/api/documents/{doc_id}/replace",
+        json={"query": "Agreement", "replacement": "Accord"},
+    )
+    assert replaced.status_code == 200, replaced.text
+    body = replaced.json()
+    assert body["replacements"] == 1
+    assert body["paragraphs"] == 1
+    assert body["paragraphs_on_standard_face"] == 0
+    assert body["truncated"] is False
+    assert body["pages_skipped"] == []
+
+    found = client.post(f"/api/documents/{doc_id}/search", json={"query": "Accord"})
+    assert found.status_code == 200
+    assert found.json()["hit_count"] >= 1
+
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    assert b"Accord" in exported.content
+    assert b"All clauses active" in exported.content
+    gone = client.post(f"/api/documents/{doc_id}/search", json={"query": "Agreement"})
+    assert gone.status_code == 200
+    assert gone.json()["hit_count"] == 0
+
+    audit = client.get("/api/audit").json()
+    assert "text_replaced" in {row["action"] for row in audit}
+    assert "Agreement" not in str(audit)
+    assert "Accord" not in str(audit)
+
+

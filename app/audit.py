@@ -45,6 +45,7 @@ _ACTIONS = frozenset({
     "page_rendered",
     "paragraph_styled",
     "text_box_added",
+    "text_replaced",
 })
 
 logger = logging.getLogger("pdfengine.audit")

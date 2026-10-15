@@ -115,6 +115,8 @@ from app.models import (
     TextSearchHitModel,
     TextSearchRequest,
     TextSearchResponse,
+    TextReplaceRequest,
+    TextReplaceResponse,
     PageTablesResponse,
     TableExportResponse,
     OptimizeRequest,
@@ -2238,6 +2240,43 @@ def search_document_endpoint(doc_id: str, request: TextSearchRequest):
         raise
     except Exception as e:
         raise _public_error(400, e)
+
+
+@app.post("/api/documents/{doc_id}/replace", response_model=TextReplaceResponse)
+@serialized_mutation
+def replace_document_endpoint(doc_id: str, request: TextReplaceRequest):
+    """Rewrites reconstructed paragraph text. The query and replacement are not stored."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    if any(ord(char) < 32 and char != "\n" for char in request.replacement):
+        raise HTTPException(
+            status_code=400,
+            detail="The replacement contains a control character.",
+        )
+    try:
+        report = doc.replace_text(
+            request.query,
+            request.replacement,
+            request.ignore_case,
+            request.max_hits,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        detail = _marked_failure_detail(e, "Find and replace: ")
+        if detail is not None:
+            raise HTTPException(status_code=400, detail=detail) from e
+        raise _public_error(400, e)
+    if int(report["replacements"]) > 0:
+        record_document_action("text_replaced", doc_id)
+    return TextReplaceResponse(
+        document_id=doc_id,
+        replacements=int(report["replacements"]),
+        paragraphs=int(report["paragraphs"]),
+        paragraphs_on_standard_face=int(report["paragraphs_on_standard_face"]),
+        truncated=bool(report["truncated"]),
+        pages_skipped=[int(index) for index in report["pages_skipped"]],
+    )
 
 
 def annot_to_model(a) -> AnnotationModel:

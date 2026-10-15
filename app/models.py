@@ -439,6 +439,24 @@ class TextSearchResponse(BaseModel):
     hits: List[TextSearchHitModel]
 
 
+class TextReplaceRequest(BaseModel):
+    """Replace reconstructed paragraph text. The query and replacement are not stored."""
+    query: str = Field(min_length=1, max_length=512)
+    replacement: str = Field(default="", max_length=4000)
+    ignore_case: bool = True
+    max_hits: int = Field(default=100, ge=1, le=500)
+
+
+class TextReplaceResponse(BaseModel):
+    """Counts for one replace. ``truncated`` means the hit cap stopped the scan."""
+    document_id: str
+    replacements: int
+    paragraphs: int
+    paragraphs_on_standard_face: int
+    truncated: bool
+    pages_skipped: List[int]
+
+
 class AnnotationModel(BaseModel):
     """Structured representation of a PDF annotation."""
     id: int
