@@ -1186,6 +1186,84 @@ def test_redaction_removes_embedded_file_that_repeats_the_text():
     assert b"classified@intel.gov" not in exported.content
 
 
+def test_redaction_clears_form_value_and_appearance_that_repeat_the_text():
+    """A form value and appearance that repeat a redacted email are cleared. The widget stays."""
+    email = b"classified@intel.gov"
+    pdf = bytearray()
+    pdf.extend(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+    offsets = []
+
+    def add(body: bytes) -> None:
+        offsets.append(len(pdf))
+        pdf.extend(body)
+
+    add(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R >>\nendobj\n")
+    add(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+    add(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Contents 4 0 R /Annots [7 0 R 8 0 R] >>\nendobj\n"
+    )
+    stream = b"BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(Contact classified@intel.gov today) Tj\nET\n"
+    add(f"4 0 obj\n<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream\nendobj\n")
+    appearance = b"BT /Helv 12 Tf (classified@intel.gov) Tj ET"
+    add(
+        f"5 0 obj\n<< /Length {len(appearance)} >>\nstream\n".encode()
+        + appearance
+        + b"\nendstream\nendobj\n"
+    )
+    add(b"6 0 obj\n<< /Fields [7 0 R 8 0 R] >>\nendobj\n")
+    add(
+        b"7 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Tx /T (email) /P 3 0 R "
+        b"/Rect [72 500 300 518] /V (classified@intel.gov) /AP << /N 5 0 R >> >>\nendobj\n"
+    )
+    add(
+        b"8 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /P 3 0 R "
+        b"/Rect [72 460 300 478] /V (quarterly totals) >>\nendobj\n"
+    )
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(offsets) + 1}\n0000000000 65535 f \n".encode())
+    for offset in offsets:
+        pdf.extend(f"{offset:010} 00000 n \n".encode())
+    pdf.extend(
+        f"trailer\n<< /Size {len(offsets) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    assert email in pdf
+
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("classified.pdf", io.BytesIO(bytes(pdf)), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    listed = client.get(f"/api/documents/{doc_id}/forms")
+    assert listed.status_code == 200
+    before = {item["name"]: item for item in listed.json()["fields"]}
+    assert listed.json()["count"] == 2
+    assert before["email"]["value"] == "classified@intel.gov"
+    assert before["note"]["value"] == "quarterly totals"
+
+    redacted = client.post(
+        f"/api/documents/{doc_id}/redact/pattern",
+        json={"pattern_type": "email"},
+    )
+    assert redacted.status_code == 200
+    assert redacted.json()["success"] is True
+
+    forms = client.get(f"/api/documents/{doc_id}/forms")
+    assert forms.status_code == 200
+    body = forms.json()
+    assert body["count"] == 2
+    fields = {item["name"]: item for item in body["fields"]}
+    assert fields["email"]["value"] == ""
+    assert fields["note"]["value"] == "quarterly totals"
+    assert fields["note"]["name"] == "note"
+
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    assert email not in exported.content
+
+
 def test_security_and_digital_signatures_workflow():
     """Validates encryption, permissions, decryption, and digital signatures API workflow."""
     pdf_bytes = create_minimal_pdf_bytes()
