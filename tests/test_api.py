@@ -4041,6 +4041,52 @@ def test_export_xlsx_writes_each_detected_table_as_text():
     assert "Widget,$100" in csv_still.json()["content"]
 
 
+def test_export_pptx_writes_one_letter_slide_from_reconstructed_text():
+    """A letter page becomes one slide whose text is the reconstructed paragraphs."""
+    import zipfile
+
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("letter.pptx.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload.status_code == 200, upload.text
+    doc_id = upload.json()["document_id"]
+
+    pptx = client.get(f"/api/documents/{doc_id}/export/pptx")
+    assert pptx.status_code == 200, pptx.text
+    assert (
+        pptx.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
+    assert 'filename="document.pptx"' in pptx.headers["content-disposition"]
+    assert pptx.headers["x-content-type-options"] == "nosniff"
+
+    with zipfile.ZipFile(io.BytesIO(pptx.content)) as archive:
+        assert archive.testzip() is None
+        names = set(archive.namelist())
+        assert "[Content_Types].xml" in names
+        assert "_rels/.rels" in names
+        assert "ppt/presentation.xml" in names
+        assert "ppt/_rels/presentation.xml.rels" in names
+        assert "ppt/slides/slide1.xml" in names
+        assert "ppt/slideMasters/slideMaster1.xml" in names
+        assert "ppt/slideLayouts/slideLayout1.xml" in names
+        assert "ppt/theme/theme1.xml" in names
+        presentation = archive.read("ppt/presentation.xml").decode("utf-8")
+        slide = archive.read("ppt/slides/slide1.xml").decode("utf-8")
+
+    assert presentation.count("<p:sldId ") == 1
+    assert 'cx="7772400"' in presentation
+    assert 'cy="10058400"' in presentation
+    assert "Contract Agreement Terms" in slide
+    assert "All clauses active." in slide
+    assert "a:blip" not in slide
+
+    docx_still = client.get(f"/api/documents/{doc_id}/export/docx")
+    assert docx_still.status_code == 200
+
+
 def test_export_docx_section_uses_the_page_box():
     """A page that is not US Letter becomes a Word section of that box."""
     import zipfile

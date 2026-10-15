@@ -37,6 +37,7 @@ _ACTIONS = frozenset({
     "document_flattened_permanently",
     "document_exported_docx",
     "document_exported_xlsx",
+    "document_exported_pptx",
     "document_exported_markdown",
     "pdfua_inspected",
     "pdfua_tagged",

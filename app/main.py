@@ -4050,6 +4050,29 @@ def export_document_xlsx_endpoint(doc_id: str):
         raise _public_error(400, e)
 
 
+@app.get("/api/documents/{doc_id}/export/pptx")
+@serialized_mutation
+def export_document_pptx_endpoint(doc_id: str):
+    """Exports each page as one PowerPoint slide (.pptx)."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        pptx_bytes = doc.export_pptx()
+        record_document_action("document_exported_pptx", doc_id)
+        return Response(
+            content=bytes(pptx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={
+                "Content-Disposition": 'attachment; filename="document.pptx"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
 @app.get(
     "/api/documents/{doc_id}/export/markdown",
     response_model=MarkdownExportResponse,
