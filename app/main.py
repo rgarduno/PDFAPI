@@ -251,8 +251,17 @@ def serialized_mutation(func):
     return wrapper
 
 
+_PERMISSION_DETAIL = "The stored document permissions do not allow this operation."
+
+
 def _public_error(status_code: int, exc: BaseException) -> HTTPException:
-    """Returns a stable client error and records the engine failure on the server."""
+    """Returns a stable client error and records the engine failure on the server.
+
+    A stored `/P` refusal keeps its sentence and uses 403. Other engine text stays hidden.
+    """
+    if _PERMISSION_DETAIL in str(exc):
+        logger.warning("Request failed (%s)", type(exc).__name__, exc_info=exc)
+        return HTTPException(status_code=403, detail=_PERMISSION_DETAIL)
     logger.warning("Request failed (%s)", type(exc).__name__, exc_info=exc)
     return HTTPException(status_code=status_code, detail=_PUBLIC_FAILURE_DETAIL)
 
@@ -501,12 +510,12 @@ def get_page_scenegraph(doc_id: str, page_idx: int):
     doc = session["doc"]
     try:
         page = doc.get_page(page_idx)
+        paragraphs_raw = page.get_paragraphs()
     except HTTPException:
         raise
     except Exception as e:
         raise _public_error(400, e)
 
-    paragraphs_raw = page.get_paragraphs()
     paragraph_models = []
 
     for p in paragraphs_raw:
@@ -577,7 +586,11 @@ def get_document_overview(doc_id: str, offset: int = 0, limit: int = _OVERVIEW_D
             paras = page.get_paragraphs()
             para_count = len(paras)
             preview_snippet = paras[0].text[:80].strip() if paras else ""
-        except Exception:
+        except HTTPException:
+            raise
+        except Exception as exc:
+            if _PERMISSION_DETAIL in str(exc):
+                raise _public_error(400, exc)
             para_count = 0
             preview_snippet = ""
 

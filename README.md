@@ -31,6 +31,7 @@ PDFAPI is the service orchestration layer within the decoupled **PDFEngine** mul
   - Dedicated WebSocket endpoint (`/ws/documents/{id}/pages/{page}/reflow`) for live line-wrap and bounding box calculations as the user types.
 - **Enterprise Security & Electronic Signatures**:
   - Detached PKCS#7 / CMS (RFC 5652) digital signatures with RSA and ECDSA keys (PEM and PKCS#12 containers). A download of a detached PKCS#7 file appends edits after the signed bytes. The original byte range still verifies. The new bytes are not covered. An encrypted PKCS#7 file is not rewritten.
+  - After a user password opens the file, this process refuses its own print, copy, and edit when those `/P` bits are clear. The owner password is unrestricted. Print is one raster, allowed when low-resolution print is set. Bit 12 is stored and does not block that raster. Bit 10 is not a separate extract path. Export of the decrypted file drops `/P`. Another program is not bound by these bits. A user password with every enforced bit set is not told apart from the owner, so a later encrypt is allowed. A page already returned still holds the paragraphs it reconstructed. A live reflow that may edit and may not copy applies the edit, then refuses the returned text.
   - RFC 3161 Time-Stamp Protocol (TSA) client support embedded into unsigned CMS attributes.
   - Non-contiguous `/ByteRange` SHA-256 integrity attestation.
 - **Tamper-Evident Audit Trail**:

@@ -716,7 +716,7 @@ class SanitizeDocumentResponse(BaseModel):
 
 
 class PermissionsModel(BaseModel):
-    """Bits stored in the encryption dictionary `/P` entry. This process does not enforce them."""
+    """Bits stored in `/P`. After a user password opens the file, this process refuses print, copy, and edit when those bits are clear."""
     print_low_res: bool = True
     print_high_res: bool = True
     modify_contents: bool = True
@@ -731,7 +731,7 @@ class EncryptDocumentRequest(BaseModel):
     """Request payload to encrypt document with AES-128 or AES-256 and password protection."""
     user_password: str = Field(default="", description="Password required to open and read document")
     owner_password: str = Field(min_length=1, description="Owner password required to change permissions. No default is applied.")
-    permissions: Optional[PermissionsModel] = Field(default=None, description="Bits stored in /P. This process does not enforce them.")
+    permissions: Optional[PermissionsModel] = Field(default=None, description="Bits stored in /P. After a user password opens the file, this process refuses print, copy, and edit when those bits are clear.")
     encrypt_metadata: Optional[bool] = Field(default=True, description="Whether to encrypt metadata stream")
     algorithm: Optional[str] = Field(default="aes128", description="Encryption algorithm: 'aes128' (Rev 4), 'aes256' (Rev 6), or 'aes256-r5' (Rev 5)")
 

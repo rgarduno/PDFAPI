@@ -1292,6 +1292,96 @@ def test_encrypt_requires_owner_password_and_hides_plaintext():
     assert b"/Encrypt" not in restored.content
 
 
+def test_user_password_refuses_print_copy_and_edit():
+    """A user password honors stored /P. The owner password does not."""
+    pdf_bytes = create_minimal_pdf_bytes()
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("contract.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+    opened = client.post(
+        f"/api/documents/{doc_id}/search",
+        json={"query": "Contract"},
+    )
+    assert opened.status_code == 200
+    assert opened.json()["hit_count"] >= 1
+
+    encrypted = client.post(
+        f"/api/documents/{doc_id}/security/encrypt",
+        json={
+            "user_password": "secret_user",
+            "owner_password": "secret_admin",
+            "permissions": {
+                "print_low_res": False,
+                "print_high_res": False,
+                "modify_contents": False,
+                "copy_extract": False,
+                "modify_annotations": False,
+                "fill_forms": False,
+                "accessibility_extract": True,
+                "assemble_document": False,
+            },
+        },
+    )
+    assert encrypted.status_code == 200
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    assert b"/Encrypt" in exported.content
+
+    def open_with(password: str) -> str:
+        uploaded = client.post(
+            "/api/documents/upload",
+            files={"file": ("encrypted.pdf", exported.content, "application/pdf")},
+        )
+        assert uploaded.status_code == 200
+        opened_id = uploaded.json()["document_id"]
+        decrypted = client.post(
+            f"/api/documents/{opened_id}/security/decrypt",
+            json={"password": password},
+        )
+        assert decrypted.status_code == 200
+        assert decrypted.json()["is_encrypted"] is False
+        return opened_id
+
+    detail = "The stored document permissions do not allow this operation."
+    user_id = open_with("secret_user")
+    refused = [
+        client.post(f"/api/documents/{user_id}/search", json={"query": "Contract"}),
+        client.get(f"/api/documents/{user_id}/pages/1/raster?format=png&dpi=144"),
+        client.post(
+            f"/api/documents/{user_id}/replace",
+            json={"query": "Contract", "replacement": "Agreement"},
+        ),
+    ]
+    for response in refused:
+        assert response.status_code == 403
+        assert response.json()["detail"] == detail
+
+    user_export = client.get(f"/api/documents/{user_id}/export")
+    assert user_export.status_code == 200
+    assert b"/Encrypt" not in user_export.content
+
+    owner_id = open_with("secret_admin")
+    found = client.post(
+        f"/api/documents/{owner_id}/search",
+        json={"query": "Contract"},
+    )
+    assert found.status_code == 200
+    assert found.json()["hit_count"] >= 1
+    painted = client.get(f"/api/documents/{owner_id}/pages/1/raster?format=png&dpi=144")
+    assert painted.status_code == 200
+    changed = client.post(
+        f"/api/documents/{owner_id}/replace",
+        json={"query": "Contract", "replacement": "Agreement"},
+    )
+    assert changed.status_code == 200
+    owner_export = client.get(f"/api/documents/{owner_id}/export")
+    assert owner_export.status_code == 200
+    assert b"/Encrypt" not in owner_export.content
+
+
 def create_pdf_with_table_bytes() -> bytes:
     """Creates a valid PDF containing a 2x2 table with vector lines and cell text."""
     pdf = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
