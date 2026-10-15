@@ -1368,6 +1368,66 @@ def test_redaction_destroys_image_samples_inside_a_region():
     assert list(raw[stride + 1 :]) == [0, 0, 0, 0, 0, 0, 190, 200, 210, 220, 230, 240]
 
 
+def test_redaction_clears_structure_text_that_repeats_the_removed_datum():
+    """A pattern redaction clears that text from the structure tree and leaves the tree."""
+    email = b"secret@corp.com"
+    content = b"BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(secret@corp.com quarterly) Tj\nET\n"
+    pdf = bytearray(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+    offsets = []
+
+    def add(body: bytes) -> None:
+        offsets.append(len(pdf))
+        pdf.extend(body)
+
+    add(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>\nendobj\n")
+    add(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
+    add(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n"
+    )
+    add(f"4 0 obj\n<< /Length {len(content)} >>\nstream\n".encode() + content + b"\nendstream\nendobj\n")
+    add(b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
+    add(
+        b"6 0 obj\n<< /Type /StructTreeRoot /K 7 0 R /RoleMap << /Paragraph /P >> >>\nendobj\n"
+    )
+    add(
+        b"7 0 obj\n<< /Type /StructElem /S /P /K 0 /P 6 0 R "
+        b"/ActualText 8 0 R /Alt (quarterly totals) /T (Section title) >>\nendobj\n"
+    )
+    add(b"8 0 obj\n(secret@corp.com)\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(offsets) + 1}\n0000000000 65535 f \n".encode())
+    for offset in offsets:
+        pdf.extend(f"{offset:010} 00000 n \n".encode())
+    pdf.extend(
+        f"trailer\n<< /Size {len(offsets) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    assert email in pdf
+
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("tagged.pdf", io.BytesIO(bytes(pdf)), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    redacted = client.post(
+        f"/api/documents/{doc_id}/redact/pattern",
+        json={"pattern_type": "email"},
+    )
+    assert redacted.status_code == 200
+    assert redacted.json()["success"] is True
+
+    exported = client.get(f"/api/documents/{doc_id}/export")
+    assert exported.status_code == 200
+    body = exported.content
+    assert email not in body
+    assert b"quarterly totals" in body
+    assert b"Section title" in body
+    assert b"/StructTreeRoot" in body
+    assert b"/RoleMap" in body
+
+
 def test_security_and_digital_signatures_workflow():
     """Validates encryption, permissions, decryption, and digital signatures API workflow."""
     pdf_bytes = create_minimal_pdf_bytes()
