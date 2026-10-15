@@ -3992,6 +3992,43 @@ def test_export_docx_and_markdown_workflow():
         assert "<w:tbl>" in doc_xml
 
 
+def test_export_docx_section_uses_the_page_box():
+    """A page that is not US Letter becomes a Word section of that box."""
+    import zipfile
+
+    pdf = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    objects = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n",
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 400 500 ] /Contents 4 0 R >>\nendobj\n",
+        b"4 0 obj\n<< /Length 0 >>\nstream\nendstream\nendobj\n",
+    ]
+    offsets = []
+    for obj in objects:
+        offsets.append(len(pdf))
+        pdf.extend(obj)
+    xref = len(pdf)
+    pdf.extend(b"xref\n0 5\n0000000000 65535 f \n")
+    for off in offsets:
+        pdf.extend(f"{off:010d} 00000 n \n".encode())
+    pdf.extend(b"trailer\n<< /Size 5 /Root 1 0 R >>\n")
+    pdf.extend(f"startxref\n{xref}\n%%EOF\n".encode())
+
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("pagebox.pdf", io.BytesIO(bytes(pdf)), "application/pdf")},
+    )
+    assert upload.status_code == 200, upload.text
+    doc_id = upload.json()["document_id"]
+    docx = client.get(f"/api/documents/{doc_id}/export/docx")
+    assert docx.status_code == 200, docx.text
+    with zipfile.ZipFile(io.BytesIO(docx.content)) as archive:
+        xml = archive.read("word/document.xml").decode("utf-8")
+    assert '<w:pgSz w:w="8000" w:h="10000"/>' in xml
+    assert "12240" not in xml
+    assert "15840" not in xml
+
+
 def test_pdfua_accessibility_inspect_and_tag_workflow():
     """Tests ISO 14289-1 (PDF/UA-1) accessibility inspection, automatic semantic structure tree tagging, and roundtrip persistence."""
     pdf_bytes = create_pdf_with_table_bytes()
