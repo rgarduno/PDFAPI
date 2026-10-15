@@ -36,6 +36,7 @@ _ACTIONS = frozenset({
     "layer_deleted",
     "document_flattened_permanently",
     "document_exported_docx",
+    "document_exported_xlsx",
     "document_exported_markdown",
     "pdfua_inspected",
     "pdfua_tagged",

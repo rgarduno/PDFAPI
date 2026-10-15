@@ -3992,6 +3992,55 @@ def test_export_docx_and_markdown_workflow():
         assert "<w:tbl>" in doc_xml
 
 
+def test_export_xlsx_writes_each_detected_table_as_text():
+    """A detected table becomes an XLSX worksheet of reconstructed text."""
+    import zipfile
+
+    pdf_bytes = create_pdf_with_table_bytes()
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("tables.xlsx.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert upload.status_code == 200, upload.text
+    doc_id = upload.json()["document_id"]
+
+    xlsx = client.get(f"/api/documents/{doc_id}/export/xlsx")
+    assert xlsx.status_code == 200, xlsx.text
+    assert (
+        xlsx.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert 'filename="document.xlsx"' in xlsx.headers["content-disposition"]
+    assert xlsx.headers["x-content-type-options"] == "nosniff"
+
+    with zipfile.ZipFile(io.BytesIO(xlsx.content)) as archive:
+        assert archive.testzip() is None
+        names = set(archive.namelist())
+        assert "[Content_Types].xml" in names
+        assert "_rels/.rels" in names
+        assert "xl/workbook.xml" in names
+        assert "xl/_rels/workbook.xml.rels" in names
+        assert "xl/styles.xml" in names
+        assert "xl/worksheets/sheet1.xml" in names
+        workbook = archive.read("xl/workbook.xml").decode("utf-8")
+        sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+
+    assert 'name="P1T1"' in workbook
+    assert workbook.count("<sheet ") == 1
+    assert 't="inlineStr"' in sheet
+    assert "<t>Item</t>" in sheet
+    assert "<t>Price</t>" in sheet
+    assert "<t>Widget</t>" in sheet
+    assert "<t>$100</t>" in sheet
+    assert "<f" not in sheet
+    assert "<v>" not in sheet
+
+    csv_still = client.get(f"/api/documents/{doc_id}/pages/1/tables/0/export?format=csv")
+    assert csv_still.status_code == 200
+    assert "Item,Price" in csv_still.json()["content"]
+    assert "Widget,$100" in csv_still.json()["content"]
+
+
 def test_export_docx_section_uses_the_page_box():
     """A page that is not US Letter becomes a Word section of that box."""
     import zipfile

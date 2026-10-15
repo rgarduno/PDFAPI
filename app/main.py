@@ -4027,6 +4027,29 @@ def export_document_docx_endpoint(doc_id: str):
         raise _public_error(400, e)
 
 
+@app.get("/api/documents/{doc_id}/export/xlsx")
+@serialized_mutation
+def export_document_xlsx_endpoint(doc_id: str):
+    """Exports detected tables into an Office Open XML workbook (.xlsx)."""
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        xlsx_bytes = doc.export_xlsx()
+        record_document_action("document_exported_xlsx", doc_id)
+        return Response(
+            content=bytes(xlsx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": 'attachment; filename="document.xlsx"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _public_error(400, e)
+
+
 @app.get(
     "/api/documents/{doc_id}/export/markdown",
     response_model=MarkdownExportResponse,
