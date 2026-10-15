@@ -136,6 +136,33 @@ class TextBoxResponse(BaseModel):
     line_count: int
 
 
+class FillSignRequest(BaseModel):
+    """A signature or initials mark painted into the page content.
+
+    `kind` is `signature` or `initials`. `mode` is `typed`, `drawn`, or
+    `image`. Typed text, drawn strokes, and image bytes are not stored.
+    This is not an ink annotation and not a PKCS#7 signature.
+    """
+    kind: str
+    mode: str
+    x: float
+    y: float
+    width: float
+    height: float
+    text: Optional[str] = None
+    strokes: Optional[List[List[List[float]]]] = None
+    image_base64: Optional[str] = None
+
+
+class FillSignResponse(BaseModel):
+    """What was appended. The typed text and the image bytes are not returned."""
+    document_id: str
+    page_number: int
+    kind: str
+    mode: str
+    resource: str
+
+
 class ImageModel(BaseModel):
     """Extracted image XObject on a page with spatial layout attributes."""
     id: int

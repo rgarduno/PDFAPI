@@ -70,6 +70,8 @@ from app.models import (
     EditParagraphResponse,
     TextBoxRequest,
     TextBoxResponse,
+    FillSignRequest,
+    FillSignResponse,
     FillFormsResponse,
     FlattenAnnotationsResponse,
     FlattenFormsResponse,
@@ -693,6 +695,43 @@ def _text_box_failure_detail(exc: BaseException) -> Optional[str]:
     return _marked_failure_detail(exc, "Text box: ") or _marked_failure_detail(exc, "Style: ")
 
 
+_FILL_SIGN_KINDS = frozenset({"signature", "initials"})
+_FILL_SIGN_MODES = frozenset({"typed", "drawn", "image"})
+
+
+def _require_fill_sign_combination(request: FillSignRequest) -> Optional[bytes]:
+    """Accepts one mark for the named mode and decodes an image when that is the mode."""
+    if request.kind not in _FILL_SIGN_KINDS:
+        raise HTTPException(status_code=400, detail="The kind is signature or initials.")
+    if request.mode not in _FILL_SIGN_MODES:
+        raise HTTPException(status_code=400, detail="The mode is typed, drawn, or image.")
+    has_text = request.text is not None
+    has_strokes = request.strokes is not None
+    has_image = request.image_base64 is not None
+    if request.mode == "typed":
+        matched = has_text and not has_strokes and not has_image
+    elif request.mode == "drawn":
+        matched = has_strokes and not has_text and not has_image
+        if matched:
+            for stroke in request.strokes or []:
+                if any(len(point) != 2 for point in stroke):
+                    matched = False
+                    break
+    else:
+        matched = has_image and not has_text and not has_strokes
+    if not matched:
+        raise HTTPException(status_code=400, detail="The mark does not match the mode.")
+    if request.mode != "image":
+        return None
+    try:
+        return base64.b64decode(request.image_base64 or "", validate=True)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=400,
+            detail="The signature image is not valid base64.",
+        ) from None
+
+
 def _marked_failure_detail(exc: BaseException, marker: str) -> Optional[str]:
     text = str(exc)
     marker_at = text.find(marker)
@@ -906,6 +945,65 @@ def add_text_box(doc_id: str, page_idx: int, request: TextBoxRequest):
         font_resource=str(appended["font_resource"]),
         base_font=str(appended["base_font"]),
         line_count=int(appended["line_count"]),
+    )
+
+
+@app.post(
+    "/api/documents/{doc_id}/pages/{page_idx}/fill-sign",
+    response_model=FillSignResponse,
+)
+def add_fill_sign(doc_id: str, page_idx: int, request: FillSignRequest):
+    """Appends a typed, drawn, or image signature or initials as page content.
+
+    The path number starts at 1. A number below 1 is rejected before the
+    session is loaded, so a missing document still answers 400. The mark is
+    not an ink annotation, not a form field, and not a PKCS#7 signature. A
+    later full save still rewrites the file. The typed name and the image
+    bytes are not stored.
+    """
+    if page_idx < 1:
+        raise HTTPException(status_code=400, detail="Page numbers in this path start at 1.")
+    image = _require_fill_sign_combination(request)
+    return _add_fill_sign(doc_id, page_idx, request, image)
+
+
+@serialized_mutation
+def _add_fill_sign(
+    doc_id: str,
+    page_idx: int,
+    request: FillSignRequest,
+    image: Optional[bytes],
+):
+    session = load_session(doc_id)
+    doc = session["doc"]
+    try:
+        appended = doc.add_fill_sign(
+            page_idx,
+            request.kind,
+            request.mode,
+            request.x,
+            request.y,
+            request.width,
+            request.height,
+            text=request.text,
+            strokes=request.strokes,
+            image=image,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        detail = _marked_failure_detail(e, "Fill and sign: ")
+        if detail is not None:
+            raise HTTPException(status_code=400, detail=detail) from e
+        raise _public_error(400, e)
+
+    record_document_action("fill_signed", doc_id)
+    return FillSignResponse(
+        document_id=doc_id,
+        page_number=page_idx,
+        kind=str(appended["kind"]),
+        mode=str(appended["mode"]),
+        resource=str(appended["resource"]),
     )
 
 

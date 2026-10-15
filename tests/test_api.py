@@ -4224,3 +4224,177 @@ def test_replace_rewrites_reconstructed_text_or_changes_nothing():
     assert "Accord" not in str(audit)
 
 
+def _tiny_signature_jpeg() -> bytes:
+    """A one-pixel JPEG header. SOF0 length 8 is enough for the image writer."""
+    return bytes([
+        0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x08, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03, 0xFF, 0xD9,
+    ])
+
+
+def test_fill_sign_appends_page_content_and_writes_nothing_on_a_bad_mark():
+    """A typed, drawn, or image mark is page content. A bad mark changes nothing."""
+    box = {"x": 72, "y": 80, "width": 200, "height": 48}
+    missing = client.post(
+        "/api/documents/missing-doc/pages/0/fill-sign",
+        json={"kind": "signature", "mode": "typed", "text": "Rafael G", **box},
+    )
+    assert missing.status_code == 400
+    assert missing.json()["detail"] == "Page numbers in this path start at 1."
+
+    _, upload = _upload_minimal("fill-sign.pdf")
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+    url = f"/api/documents/{doc_id}/pages/1/fill-sign"
+    rejected = [
+        (
+            {"kind": "seal", "mode": "typed", "text": "RG", **box},
+            "The kind is signature or initials.",
+        ),
+        (
+            {"kind": "signature", "mode": "ink", "text": "RG", **box},
+            "The mode is typed, drawn, or image.",
+        ),
+        (
+            {
+                "kind": "signature",
+                "mode": "typed",
+                "text": "RG",
+                "strokes": [[[80, 90], [180, 110]]],
+                **box,
+            },
+            "The mark does not match the mode.",
+        ),
+        (
+            {"kind": "initials", "mode": "typed", "text": "TOO LONG!", **box},
+            "Initials are longer than 8 characters.",
+        ),
+        (
+            {"kind": "signature", "mode": "typed", "text": "Rafael \u03a9", **box},
+            "A character is not in the standard fonts.",
+        ),
+        (
+            {"kind": "signature", "mode": "typed", "text": "Rafael\nG", **box},
+            "The mark contains a control character.",
+        ),
+        (
+            {
+                "kind": "signature",
+                "mode": "drawn",
+                "strokes": [[[10, 90], [180, 110]]],
+                **box,
+            },
+            "A drawn point is outside the rectangle.",
+        ),
+        (
+            {"kind": "signature", "mode": "image", "image_base64": "!!!!", **box},
+            "The signature image is not valid base64.",
+        ),
+        (
+            {
+                "kind": "signature",
+                "mode": "image",
+                "image_base64": base64.b64encode(b"not an image").decode("ascii"),
+                **box,
+            },
+            "The signature image must be a JPEG or PNG.",
+        ),
+        (
+            {"kind": "signature", "mode": "typed", "text": "Rafael G", **box},
+            "Page index is out of range.",
+        ),
+    ]
+    for payload, detail in rejected[:-1]:
+        response = client.post(url, json=payload)
+        assert response.status_code == 400, payload
+        assert response.json()["detail"] == detail, payload
+        assert "Fill and sign:" not in response.json()["detail"]
+    out_of_range = client.post(
+        f"/api/documents/{doc_id}/pages/4/fill-sign",
+        json=rejected[-1][0],
+    )
+    assert out_of_range.status_code == 400
+    assert out_of_range.json()["detail"] == rejected[-1][1]
+
+    early = client.post(
+        f"/api/documents/{doc_id}/pages/0/fill-sign",
+        json={"kind": "signature", "mode": "typed", "text": "Rafael G", **box},
+    )
+    assert early.status_code == 400
+    assert early.json()["detail"] == "Page numbers in this path start at 1."
+
+    assert "fill_signed" not in {row["action"] for row in client.get("/api/audit").json()}
+    untouched = client.get(f"/api/documents/{doc_id}/export")
+    assert untouched.status_code == 200
+    assert b"(Rafael G)" not in untouched.content
+    assert b"/Times-Italic" not in untouched.content
+    assert b"/Ink" not in untouched.content
+    assert b"/ByteRange" not in untouched.content
+
+    typed = client.post(
+        url,
+        json={"kind": "signature", "mode": "typed", "text": "Rafael G", **box},
+    )
+    assert typed.status_code == 200, typed.text
+    typed_body = typed.json()
+    assert typed_body["document_id"] == doc_id
+    assert typed_body["page_number"] == 1
+    assert typed_body["kind"] == "signature"
+    assert typed_body["mode"] == "typed"
+    assert typed_body["resource"] == "F_ST_TiIt"
+    assert "Rafael" not in str(typed_body)
+
+    found = client.post(f"/api/documents/{doc_id}/search", json={"query": "Rafael"})
+    assert found.status_code == 200
+    assert found.json()["hit_count"] >= 1
+    typed_export = client.get(f"/api/documents/{doc_id}/export")
+    assert typed_export.status_code == 200
+    assert b"(Rafael G)" in typed_export.content
+    assert b"/Times-Italic" in typed_export.content
+    assert b"/Ink" not in typed_export.content
+    assert b"/ByteRange" not in typed_export.content
+    assert b"/Sig" not in typed_export.content
+
+    drawn = client.post(
+        url,
+        json={
+            "kind": "initials",
+            "mode": "drawn",
+            "strokes": [[[80, 90], [180, 110]]],
+            **box,
+        },
+    )
+    assert drawn.status_code == 200, drawn.text
+    assert drawn.json()["kind"] == "initials"
+    assert drawn.json()["mode"] == "drawn"
+    assert drawn.json()["resource"] == "path"
+    drawn_export = client.get(f"/api/documents/{doc_id}/export")
+    assert b"80.00 90.00 m\n" in drawn_export.content
+    assert b"180.00 110.00 l\n" in drawn_export.content
+    assert b"S\n" in drawn_export.content
+    assert b"/Ink" not in drawn_export.content
+    assert b"/Annots" not in drawn_export.content
+
+    image = client.post(
+        url,
+        json={
+            "kind": "signature",
+            "mode": "image",
+            "image_base64": base64.b64encode(_tiny_signature_jpeg()).decode("ascii"),
+            **box,
+        },
+    )
+    assert image.status_code == 200, image.text
+    image_body = image.json()
+    assert image_body["mode"] == "image"
+    assert image_body["resource"].startswith("FSIG_")
+    image_export = client.get(f"/api/documents/{doc_id}/export")
+    assert f"/{image_body['resource']} Do".encode() in image_export.content
+    assert b"/DCTDecode" in image_export.content
+    assert b"/Annots" not in image_export.content
+    assert b"/ByteRange" not in image_export.content
+
+    audit = client.get("/api/audit").json()
+    assert "fill_signed" in {row["action"] for row in audit}
+    assert "Rafael" not in str(audit)
+
+
