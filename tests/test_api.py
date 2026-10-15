@@ -1264,6 +1264,110 @@ def test_redaction_clears_form_value_and_appearance_that_repeat_the_text():
     assert email not in exported.content
 
 
+def _png_pixels(png: bytes) -> bytes:
+    """Returns the uncompressed scanlines of a single-IDAT PNG."""
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    offset = 8
+    idat = bytearray()
+    while offset + 8 <= len(png):
+        length = struct.unpack(">I", png[offset : offset + 4])[0]
+        kind = png[offset + 4 : offset + 8]
+        data = png[offset + 8 : offset + 8 + length]
+        offset += 12 + length
+        if kind == b"IDAT":
+            idat.extend(data)
+        elif kind == b"IEND":
+            break
+    return zlib.decompress(bytes(idat))
+
+
+def test_redaction_destroys_image_samples_inside_a_region():
+    """A region redaction blacks out the image samples that fall inside it."""
+    samples = bytes(
+        [
+            10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+            130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240,
+        ]
+    )
+    content = b"q\n4 0 0 2 100 200 cm\n/Im1 Do\nQ\n"
+    pdf = bytearray(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n")
+    offsets = []
+
+    def add(body: bytes) -> None:
+        offsets.append(len(pdf))
+        pdf.extend(body)
+
+    add(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+    add(b"2 0 obj\n<< /Type /Pages /Kids [ 3 0 R ] /Count 1 >>\nendobj\n")
+    add(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] "
+        b"/Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n"
+    )
+    add(
+        f"4 0 obj\n<< /Length {len(content)} >>\nstream\n".encode()
+        + content
+        + b"endstream\nendobj\n"
+    )
+    add(
+        f"5 0 obj\n<< /Type /XObject /Subtype /Image /Width 4 /Height 2 "
+        f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {len(samples)} >>\nstream\n".encode()
+        + samples
+        + b"endstream\nendobj\n"
+    )
+    xref = len(pdf)
+    pdf.extend(b"xref\n0 6\n0000000000 65535 f \n")
+    for offset in offsets:
+        pdf.extend(f"{offset:010} 00000 n \n".encode())
+    pdf.extend(f"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("scan.pdf", io.BytesIO(bytes(pdf)), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()["document_id"]
+
+    before = client.get(f"/api/documents/{doc_id}/pages/1/images")
+    assert before.status_code == 200
+    listed = before.json()
+    assert listed["count"] == 1
+    image = listed["images"][0]
+    assert image["name"] == "Im1"
+    assert image["id"] == 5
+    assert image["width_px"] == 4
+    assert image["height_px"] == 2
+
+    redacted = client.post(
+        f"/api/documents/{doc_id}/redact/regions",
+        json={
+            "page_number": 1,
+            "regions": [{"min_x": 100.0, "min_y": 200.0, "max_x": 102.0, "max_y": 202.0}],
+            "overlay_text": "",
+        },
+    )
+    assert redacted.status_code == 200
+    assert redacted.json()["success"] is True
+
+    after = client.get(f"/api/documents/{doc_id}/pages/1/images")
+    assert after.status_code == 200
+    kept = after.json()
+    assert kept["count"] == 1
+    assert kept["images"][0]["name"] == "Im1"
+    assert kept["images"][0]["id"] == image["id"]
+    assert kept["images"][0]["width_px"] == 4
+    assert kept["images"][0]["height_px"] == 2
+
+    binary = client.get(f"/api/documents/{doc_id}/images/{image['id']}")
+    assert binary.status_code == 200
+    assert binary.headers["content-type"].startswith("image/png")
+    raw = _png_pixels(binary.content)
+    assert len(raw) == 26
+    stride = 13
+    assert raw[0] == 0 and raw[stride] == 0
+    assert list(raw[1:stride]) == [0, 0, 0, 0, 0, 0, 70, 80, 90, 100, 110, 120]
+    assert list(raw[stride + 1 :]) == [0, 0, 0, 0, 0, 0, 190, 200, 210, 220, 230, 240]
+
+
 def test_security_and_digital_signatures_workflow():
     """Validates encryption, permissions, decryption, and digital signatures API workflow."""
     pdf_bytes = create_minimal_pdf_bytes()
